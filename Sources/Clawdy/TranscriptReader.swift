@@ -1,7 +1,7 @@
 import Foundation
 
 /// A read of a session's JSONL transcript. Incremental: full file on first sight, then only the
-/// bytes appended since last time.
+/// bytes appended since last time. Only ever touched from SessionStore's background queue.
 final class TranscriptReader {
     let sessionId: String
     private(set) var path: String?
@@ -10,6 +10,7 @@ final class TranscriptReader {
 
     // Signals folded from the record stream.
     private(set) var idle = false                 // last turn ended (real end_turn with text)
+    private(set) var idleSince: Double = 0        // epoch seconds of that end_turn (the "doneAt")
     private(set) var title: String?
     private(set) var lastEventTime: Double = 0
     private(set) var errored = false              // api_error not yet superseded by a new turn
@@ -65,7 +66,9 @@ final class TranscriptReader {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = obj["type"] as? String else { return }
 
+        var recordTime: Double = 0
         if let ts = obj["timestamp"] as? String, let epoch = Self.epoch(ts) {
+            recordTime = epoch
             lastEventTime = max(lastEventTime, epoch)
         }
 
@@ -77,6 +80,7 @@ final class TranscriptReader {
         case "user":
             // A new prompt or a returned tool result: Claude has more to do.
             idle = false
+            idleSince = 0
             errored = false
             endedWithQuestion = false
             if let mode = obj["permissionMode"] as? String { setPermissionMode(mode) }
@@ -97,18 +101,24 @@ final class TranscriptReader {
 
             if stop == "tool_use" {
                 idle = false
+                idleSince = 0
             } else if stop == "end_turn" {
                 // A thinking-only end_turn is an intermediate extended-thinking event, not the real
                 // end of a turn — ignore it so the crab doesn't flip to idle mid-thought.
-                if blockTypes.contains("text") {
+                let realEnd = blockTypes.contains("text") || !blockTypes.isSubset(of: ["thinking"])
+                if realEnd {
                     idle = true
-                    endedWithQuestion = endedWithQuestion || Self.lastTextIsQuestion(content)
-                } else if !blockTypes.isSubset(of: ["thinking"]) {
-                    idle = true
+                    idleSince = recordTime > 0 ? recordTime : lastEventTime
+                    if blockTypes.contains("text") {
+                        endedWithQuestion = endedWithQuestion || Self.lastTextIsQuestion(content)
+                    }
                 }
             }
         case "system":
-            if obj["subtype"] as? String == "api_error" { errored = true }
+            if obj["subtype"] as? String == "api_error" {
+                errored = true
+                if !idle { idle = true; idleSince = recordTime > 0 ? recordTime : lastEventTime }
+            }
         default:
             break
         }
@@ -128,8 +138,7 @@ final class TranscriptReader {
 
     private static func lastTextIsQuestion(_ content: [[String: Any]]) -> Bool {
         guard let text = content.last(where: { $0["type"] as? String == "text" })?["text"] as? String else { return false }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.hasSuffix("?")
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
     }
 
     private static let formatter: ISO8601DateFormatter = {

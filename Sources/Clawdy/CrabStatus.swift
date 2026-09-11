@@ -1,13 +1,14 @@
 import AppKit
 
-/// Everything a crab can be. One value per session, chosen by StatusResolver using the plan's
-/// priority order: permission > question > error > done-not-seen > working/tool > dormant.
+/// Everything a crab can be. One value per session, chosen by SessionStore using the plan's
+/// priority order: permission > question > error > done-not-seen > working/tool > done-seen > dormant.
 enum CrabStatus: Equatable {
     case working            // generating, or a tool is running normally
     case usingTool          // a specific tool is running (shows a tool badge)
     case needsPermission    // waiting for you to approve something
     case needsQuestion      // finished its turn by asking you a question
     case doneUnseen         // finished, and you have not looked yet
+    case doneSeen           // finished, and you have looked (badge gone, relaxed)
     case dormant            // no activity for a long time
     case error              // an API error ended the turn
 
@@ -16,6 +17,9 @@ enum CrabStatus: Equatable {
 
     /// True when the crab wants your attention.
     var needsYou: Bool { self == .needsPermission || self == .needsQuestion }
+
+    /// True for the states the "seen" rule can clear.
+    var isUnseenFinish: Bool { self == .doneUnseen || self == .needsQuestion || self == .error }
 }
 
 /// How to draw the badge for a status: SF Symbol name + circle color. Nil = no badge.
@@ -31,7 +35,7 @@ struct BadgeStyle {
         case .doneUnseen:      return BadgeStyle(symbol: "checkmark", color: Palette.ok)
         case .usingTool:       return BadgeStyle(symbol: "wrench.and.screwdriver.fill", color: Palette.tool)
         case .dormant:         return BadgeStyle(symbol: "zzz", color: Palette.sleep)
-        case .working:         return nil
+        case .working, .doneSeen: return nil
         }
     }
 

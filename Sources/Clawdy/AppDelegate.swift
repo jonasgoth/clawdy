@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let version = "0.3.0"
@@ -6,16 +7,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var playpen: PlaypenController!
     private var store: SessionStore!
+    private let seen = SeenDetector()
 
     private var menu: NSMenu!
     private let crabCountItem = NSMenuItem(title: "No sessions yet", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "Hide playpen", action: #selector(togglePlaypen), keyEquivalent: "")
     private let hooksItem = NSMenuItem(title: "Turn on instant updates…", action: #selector(toggleHooks), keyEquivalent: "")
+    private let axItem = NSMenuItem(title: "Allow window checks…", action: #selector(requestAccessibility), keyEquivalent: "")
     private var sessionSeparatorTop: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         playpen = PlaypenController()
-        store = SessionStore(scene: playpen.scene)
+        seen.start()
+        store = SessionStore(scene: playpen.scene, seen: seen)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -40,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(reset)
         hooksItem.target = self
         menu.addItem(hooksItem)
+        axItem.target = self
+        menu.addItem(axItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Clawdy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -77,6 +83,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Asks macOS for Accessibility permission so Clawdy can read which Claude window is in front
+    /// (used to clear Cowork "done" badges precisely). Only ever runs when you click this.
+    @objc private func requestAccessibility() {
+        SeenDetector.requestAccessibility()
+    }
+
     private func notify(_ title: String, _ body: String) {
         let alert = NSAlert()
         alert.messageText = title
@@ -93,6 +105,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             : "\(rows.count) session\(rows.count == 1 ? "" : "s") running"
         toggleItem.title = playpen.isVisible ? "Hide playpen" : "Show playpen"
         hooksItem.title = HookInstaller.isInstalled ? "Turn off instant updates" : "Turn on instant updates…"
+        let trusted = AXIsProcessTrusted()
+        axItem.title = trusted ? "Window checks: on" : "Allow window checks…"
+        axItem.isEnabled = !trusted
 
         let topIndex = menu.index(of: sessionSeparatorTop)
         while topIndex > 0, let item = menu.item(at: topIndex - 1), item !== crabCountItem {
@@ -113,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .needsQuestion:   return "🟠"
         case .error:           return "⚠️"
         case .doneUnseen:      return "🟢"
+        case .doneSeen:        return "○"
         case .usingTool:       return "🔧"
         case .dormant:         return "💤"
         case .working:         return "●"

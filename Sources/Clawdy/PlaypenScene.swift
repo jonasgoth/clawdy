@@ -30,6 +30,15 @@ final class PlaypenScene: SKScene {
 
     // MARK: - Session-driven crabs
 
+    /// Apply a full snapshot from the store: add/update/remove crabs and babies in one pass.
+    func apply(_ snapshot: SessionStore.Snapshot) {
+        let ids = Set(snapshot.crabs.map { $0.id })
+        for id in Array(byId.keys) where !ids.contains(id) { removeCrab(id: id) }
+        for c in snapshot.crabs { syncCrab(id: c.id, title: c.title, color: c.color, status: c.status) }
+        for b in snapshot.babies { syncBaby(id: b.id, parentId: b.parentId, color: b.color) }
+        pruneBabies(keeping: Set(snapshot.babies.map { $0.id }))
+    }
+
     func syncCrab(id: String, title: String, color: NSColor, status: CrabStatus) {
         if let crab = byId[id] {
             crab.title = title

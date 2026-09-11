@@ -50,8 +50,8 @@ final class CrabNode: SKNode {
     private var tintedWalk: [SKTexture] = CrabSprite.walkTextures
     private var tintedIdle: SKTexture { tintedWalk.first ?? CrabSprite.idleTexture }
 
-    var title: String = "" { didSet { updateLabel() } }
-    var projectColor: NSColor = CrabPalette.colors[0] { didSet { applyColor() } }
+    var title: String = "" { didSet { if title != oldValue { updateLabel() } } }
+    var projectColor: NSColor = CrabPalette.colors[0] { didSet { if projectColor != oldValue { applyColor() } } }
 
     var facingRight = true { didSet { sprite.xScale = (facingRight ? 1 : -1) * abs(sprite.xScale) } }
 
@@ -160,7 +160,7 @@ final class CrabNode: SKNode {
     func setStatus(_ newStatus: CrabStatus) {
         let changed = newStatus != status
         status = newStatus
-        updateBadge()
+        if changed { updateBadge() }
         applyGait(force: changed || sprite.action(forKey: "gait") == nil)
     }
 
@@ -186,6 +186,9 @@ final class CrabNode: SKNode {
             sprite.texture = tintedIdle
             breathe()
             occasionalHop()
+        case .doneSeen:
+            sprite.texture = tintedIdle
+            breathe()
         case .dormant:
             sprite.texture = tintedIdle
             sprite.alpha = 0.55

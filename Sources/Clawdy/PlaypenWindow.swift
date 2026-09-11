@@ -43,7 +43,7 @@ final class PlaypenController {
         skView = PlaypenView(frame: NSRect(origin: .zero, size: frame.size))
         skView.allowsTransparency = true
         skView.ignoresSiblingOrder = true
-        skView.preferredFramesPerSecond = 60
+        skView.preferredFramesPerSecond = 30
         skView.autoresizingMask = [.width, .height]
 
         scene = PlaypenScene(size: frame.size)

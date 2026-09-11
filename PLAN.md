@@ -144,7 +144,7 @@ Why Swift, not Electron: both inspiration apps are Swift. Overlay windows, click
 
 ## 6. Build order (each step is something you can see)
 
-Status: Phase 2 done. Run `./build.sh --run`. Turn on instant updates from the menu to install hooks (optional). Debug the click-through with `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy`.
+Status: Phase 3 done. Run `./build.sh --run`. Optional menu items: "Turn on instant updates" (installs hooks) and "Allow window checks" (Accessibility, for Cowork seen-detection). Debug: `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy` logs status changes, seen-rule inputs and slow ticks. Debug the click-through with `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy`.
 
 **Phase 0 — Skeleton (day 1)** ✅ done 2026-09-12
 Swift package + build script. Menu bar icon. Empty see-through strip along the bottom of the screen. One static crab you can drag. Prove clicks pass through to apps behind it.
@@ -155,7 +155,7 @@ Watch `~/.claude/sessions` and the transcripts. One crab per live session. Color
 **Phase 2 — Feelings (days 4–5)** ✅ done 2026-09-12
 Full state table. Badges. Hook installer for instant permission/done. Cowork via audit.jsonl. Baby crabs for sub-agents.
 
-**Phase 3 — Seen rule (days 6–7)**
+**Phase 3 — Seen rule (days 6–7)** ✅ done 2026-09-12
 The rule in section 4. Test: finish a chat while looking at it, while on another chat, while in Chrome, while screen locked.
 
 **Phase 4 — Personality (week 2)**

@@ -4,10 +4,18 @@ import Foundation
 /// ~/Library/Application Support/Claude/local-agent-mode-sessions/<acct>/<org>/local_*.json, with
 /// a sibling folder holding audit.jsonl. Hooks don't fire for them, so status comes from the audit
 /// log. We only show a crab while a session is genuinely active, to avoid ghosts from old runs.
-enum CoworkWatcher {
-    struct Session { let sessionId: String; let title: String; let projectName: String; let status: CrabStatus }
+///
+/// Cheap by design: the folder listing is refreshed every 5 s, the audit file's mtime is checked
+/// (a stat) before anything is parsed, and metadata JSON is cached by mtime.
+final class CoworkWatcher {
+    struct Session {
+        let sessionId: String
+        let title: String
+        let projectName: String
+        let status: CrabStatus
+        let lastActivity: Double     // audit.jsonl mtime (epoch seconds)
+    }
 
-    /// A Cowork crab is only shown if its audit log changed this recently.
     static let liveWindow: TimeInterval = 300
 
     static var baseDir: String {
@@ -15,39 +23,54 @@ enum CoworkWatcher {
             .appendingPathComponent("Library/Application Support/Claude/local-agent-mode-sessions")
     }
 
-    static func scan(now: Double = Date().timeIntervalSince1970) -> [Session] {
+    private var files: [String] = []
+    private var lastListing: Double = 0
+    private var metaCache: [String: (mtime: Double, title: String, cliId: String?, archived: Bool)] = [:]
+
+    func scan(now: Double) -> [Session] {
         let fm = FileManager.default
-        guard let metas = metadataFiles() else { return [] }
+        if now - lastListing > 5 {
+            lastListing = now
+            files = Self.listMetadataFiles()
+        }
         var out: [Session] = []
-
-        for meta in metas {
-            guard let data = fm.contents(atPath: meta),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let sessionId = (obj["cliSessionId"] as? String) ?? (obj["sessionId"] as? String) else { continue }
-            if obj["isArchived"] as? Bool == true { continue }
-
-            // audit.jsonl sits in the folder named like the metadata file (minus .json).
+        for meta in files {
+            // Stat the audit log first; skip everything that isn't fresh.
             let folder = String(meta.dropLast(5))
             let audit = "\(folder)/audit.jsonl"
-            guard let attrs = try? fm.attributesOfItem(atPath: audit),
-                  let modified = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970,
-                  now - modified <= liveWindow else { continue }
+            guard let auditAttrs = try? fm.attributesOfItem(atPath: audit),
+                  let auditMtime = (auditAttrs[.modificationDate] as? Date)?.timeIntervalSince1970,
+                  now - auditMtime <= Self.liveWindow else { continue }
 
-            let tail = tailString(ofPath: audit, maxBytes: 48_000)
-            let outcome = interpret(tail: tail)
-            if outcome.ended { continue }        // session finished — no crab
-
-            let title = (obj["title"] as? String) ?? "Cowork"
-            out.append(Session(sessionId: "cowork:\(sessionId)", title: title,
-                               projectName: "cowork-\(title)", status: outcome.status))
+            guard let m = cachedMeta(meta), !m.archived else { continue }
+            let outcome = Self.interpret(tail: Self.tailString(ofPath: audit, maxBytes: 48_000))
+            if outcome.ended { continue }
+            let id = "cowork:" + (m.cliId ?? (meta as NSString).lastPathComponent)
+            out.append(Session(sessionId: id, title: m.title, projectName: "cowork-\(m.title)",
+                               status: outcome.status, lastActivity: auditMtime))
         }
         return out
     }
 
-    private static func metadataFiles() -> [String]? {
+    private func cachedMeta(_ path: String) -> (mtime: Double, title: String, cliId: String?, archived: Bool)? {
         let fm = FileManager.default
-        guard let accounts = try? fm.contentsOfDirectory(atPath: baseDir) else { return nil }
-        var files: [String] = []
+        guard let attrs = try? fm.attributesOfItem(atPath: path),
+              let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else { return nil }
+        if let cached = metaCache[path], cached.mtime == mtime { return cached }
+        guard let data = fm.contents(atPath: path),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let entry = (mtime: mtime,
+                     title: (obj["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Cowork",
+                     cliId: obj["cliSessionId"] as? String,
+                     archived: obj["isArchived"] as? Bool ?? false)
+        metaCache[path] = entry
+        return entry
+    }
+
+    private static func listMetadataFiles() -> [String] {
+        let fm = FileManager.default
+        guard let accounts = try? fm.contentsOfDirectory(atPath: baseDir) else { return [] }
+        var out: [String] = []
         for account in accounts {
             let accountPath = "\(baseDir)/\(account)"
             guard let orgs = try? fm.contentsOfDirectory(atPath: accountPath) else { continue }
@@ -55,11 +78,11 @@ enum CoworkWatcher {
                 let orgPath = "\(accountPath)/\(org)"
                 guard let entries = try? fm.contentsOfDirectory(atPath: orgPath) else { continue }
                 for entry in entries where entry.hasPrefix("local_") && entry.hasSuffix(".json") {
-                    files.append("\(orgPath)/\(entry)")
+                    out.append("\(orgPath)/\(entry)")
                 }
             }
         }
-        return files
+        return out
     }
 
     /// Read status from the audit tail: pending permission, ended, or working/done.
@@ -111,7 +134,7 @@ enum CoworkWatcher {
         let data = handle.readDataToEndOfFile()
         var text = String(data: data, encoding: .utf8) ?? ""
         if start > 0, let firstNewline = text.firstIndex(of: "\n") {
-            text = String(text[text.index(after: firstNewline)...])   // drop the partial first line
+            text = String(text[text.index(after: firstNewline)...])
         }
         return text
     }
