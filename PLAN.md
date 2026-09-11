@@ -209,7 +209,7 @@ Own crab art. App icon. Sign and notarize. DMG + Homebrew cask. README. MIT lice
 
 **I made for you** (say so if you disagree):
 - Swift + SpriteKit, macOS 14+.
-- Crabs live in a strip along the bottom of the main screen, about 180 px tall, full width. Movable and resizable from the menu.
-- One crab per session, all three sources. Sub-agents are baby crabs that follow the parent.
+- Crabs live on the Dock's row, in the wallpaper gaps left and right of the Dock (never under it). The Dock's footprint comes from Accessibility when allowed, else an estimate from Dock preferences. If the Dock is hidden or on a side, the whole bottom edge is used. (Changed by Jonas 2026-09-12.)
+- One crab per session, all three sources, each with its own color. Sub-agents are baby crabs that follow the parent. A crab leaves after 5 minutes idle (unless it needs you); badges are hidden for now, the pet's pose carries the state.
 - Archived chats and dead processes walk off. Cowork crabs leave after the `result` event or when archived.
 - Name: Clawdy. Repo: `Package.swift` (Xcode opens it; `./build.sh --run` builds and launches), `Sources/`, `hooks/`, `Assets/`, `PLAN.md`.

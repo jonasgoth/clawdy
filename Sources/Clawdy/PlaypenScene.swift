@@ -4,9 +4,11 @@ import SpriteKit
 /// The 2D floor the crabs stand on. Owns the crabs (and sub-agent baby crabs), handles dragging,
 /// runs the little wander brain, and lets the SessionStore add / update / remove crabs.
 final class PlaypenScene: SKScene {
-    static let floorInset: CGFloat = 6
+    static let floorInset: CGFloat = 1
     /// How far from the herd's center a crab will roam (grows a little with the herd).
     static let baseHerdSpread: CGFloat = 160
+    /// How fast a relaxed crab ambles during its occasional shuffle.
+    static let strollSpeed: CGFloat = 22
     /// Minimum breathing room between crabs.
     static let spacing: CGFloat = 96
     /// After you drop a crab it stays put this long before rejoining the herd.
@@ -29,6 +31,39 @@ final class PlaypenScene: SKScene {
 
     var isDragging: Bool { dragged != nil }
     var floorY: CGFloat { Self.floorInset }
+
+    /// The Dock's footprint in scene x (with margin). Pets live in the gaps on either side of it.
+    var blockedX: ClosedRange<CGFloat>? {
+        didSet {
+            guard blockedX != oldValue else { return }
+            for crab in crabs where crab !== dragged {
+                let x = clampX(crab.position.x, for: crab)
+                if x != crab.position.x { crab.wanderTarget = x; crab.startMoving() }
+            }
+        }
+    }
+
+    /// Where pets may stand: one range per wallpaper gap (or the whole floor if there is no Dock here).
+    private var allowedRanges: [ClosedRange<CGFloat>] {
+        let edge: CGFloat = 40
+        guard let b = blockedX else { return [edge...max(edge, size.width - edge)] }
+        var out: [ClosedRange<CGFloat>] = []
+        if b.lowerBound - edge > edge + 60 { out.append(edge...(b.lowerBound)) }
+        if size.width - edge - b.upperBound > 60 { out.append(b.upperBound...(size.width - edge)) }
+        return out.isEmpty ? [edge...max(edge, size.width - edge)] : out
+    }
+
+    private func range(containing x: CGFloat) -> ClosedRange<CGFloat> {
+        let ranges = allowedRanges
+        if let r = ranges.first(where: { $0.contains(x) }) { return r }
+        return ranges.min(by: { distance(x, to: $0) < distance(x, to: $1) }) ?? ranges[0]
+    }
+
+    private func distance(_ x: CGFloat, to r: ClosedRange<CGFloat>) -> CGFloat {
+        x < r.lowerBound ? r.lowerBound - x : (x > r.upperBound ? x - r.upperBound : 0)
+    }
+
+    private func crabs(in r: ClosedRange<CGFloat>) -> [CrabNode] { crabs.filter { r.contains($0.position.x) } }
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -134,25 +169,24 @@ final class PlaypenScene: SKScene {
         adaptFrameRate()
     }
 
-    /// Crabs roam near the herd's center, keep a little distance from each other, and pause between
-    /// walks. Working crabs are quick and restless; relaxed ones amble and often just sit.
+    /// Only relaxed crabs roam, and barely: they stand and live their little life, and every now
+    /// and then take one short shuffle. Working crabs stay put and just play their animation.
     private func wander(dt: TimeInterval) {
-        let herdCenter = crabs.isEmpty ? size.width / 2
-            : crabs.map { $0.position.x }.reduce(0, +) / CGFloat(crabs.count)
-
         for crab in crabs where crab !== dragged {
-            let working = crab.currentStatus == .working
+            let home = range(containing: crab.position.x)
+            let mates = crabs(in: home)
+            let herdCenter = mates.isEmpty ? (home.lowerBound + home.upperBound) / 2
+                : mates.map { $0.position.x }.reduce(0, +) / CGFloat(mates.count)
 
             if let target = crab.wanderTarget {
-                let speed: CGFloat = working ? 55 : 32
                 let dx = target - crab.position.x
                 if abs(dx) <= 1.5 {
                     crab.position.x = target
                     crab.wanderTarget = nil
                     crab.stopMoving()
-                    crab.nextWanderAt = sceneTime + (working ? .random(in: 0.6...2.5) : .random(in: 3...8))
+                    crab.nextWanderAt = sceneTime + .random(in: 12...30)
                 } else {
-                    let step = min(abs(dx), speed * CGFloat(dt))
+                    let step = min(abs(dx), Self.strollSpeed * CGFloat(dt))
                     crab.position.x += dx > 0 ? step : -step
                     crab.facingRight = dx > 0
                 }
@@ -161,18 +195,21 @@ final class PlaypenScene: SKScene {
 
             guard crab.canWander, sceneTime >= crab.nextWanderAt, sceneTime >= crab.holdUntil else { continue }
 
-            // Relaxed crabs often decide to just sit a while longer.
-            if !working, Bool.random() {
-                crab.nextWanderAt = sceneTime + .random(in: 2...5)
+            // Most of the time it just stays where it is.
+            if CGFloat.random(in: 0..<1) < 0.8 {
+                crab.nextWanderAt = sceneTime + .random(in: 8...18)
                 continue
             }
 
-            let spread = Self.baseHerdSpread + CGFloat(max(0, crabs.count - 3)) * 45
-            var target = herdCenter + .random(in: -spread...spread)
+            // One short shuffle, leaning back toward the herd if it has drifted off.
+            let towardHerd: CGFloat = herdCenter > crab.position.x ? 1 : -1
+            let drifted = abs(herdCenter - crab.position.x) > Self.baseHerdSpread
+            let direction: CGFloat = drifted ? towardHerd : (Bool.random() ? 1 : -1)
+            var target = crab.position.x + direction * .random(in: 18...55)
             target = separated(target, from: crab)
-            target = clampX(target, for: crab)
-            if abs(target - crab.position.x) < 12 {
-                crab.nextWanderAt = sceneTime + 1.5
+            target = min(max(target, home.lowerBound + crab.size.width / 2), home.upperBound - crab.size.width / 2)
+            if abs(target - crab.position.x) < 8 {
+                crab.nextWanderAt = sceneTime + .random(in: 6...12)
                 continue
             }
             crab.wanderTarget = target
@@ -216,7 +253,7 @@ final class PlaypenScene: SKScene {
             guard let parentId = babyParent[babyId], let parent = byId[parentId] else { continue }
             let side: CGFloat = baby.id.hashValue % 2 == 0 ? -1 : 1
             let targetX = parent.position.x + side * (parent.size.width * 0.5 + 12)
-            let dx = targetX - baby.position.x
+            let dx = clampX(targetX, for: baby) - baby.position.x
             if abs(dx) > 1 {
                 baby.facingRight = dx > 0
                 baby.position.x += max(-2.5, min(2.5, dx * 0.15))
@@ -263,24 +300,32 @@ final class PlaypenScene: SKScene {
         }
     }
 
-    /// New crabs arrive near the herd, not at the far edges.
+    /// New crabs arrive in the emptier wallpaper gap (the wider one on a tie), near its herd.
     private func spawnX() -> CGFloat {
-        guard !crabs.isEmpty else { return size.width * 0.5 }
-        let herdCenter = crabs.map { $0.position.x }.reduce(0, +) / CGFloat(crabs.count)
-        var x = herdCenter + .random(in: -100...100)
+        let ranges = allowedRanges
+        let home = ranges.min(by: { a, b in
+            let ca = crabs(in: a).count, cb = crabs(in: b).count
+            return ca != cb ? ca < cb : (a.upperBound - a.lowerBound) > (b.upperBound - b.lowerBound)
+        }) ?? ranges[0]
+        let mates = crabs(in: home)
+        let center = mates.isEmpty ? (home.lowerBound + home.upperBound) / 2
+            : mates.map { $0.position.x }.reduce(0, +) / CGFloat(mates.count)
+        var x = center + .random(in: -80...80)
         for _ in 0..<4 {
             guard let neighbour = crabs.first(where: { abs($0.position.x - x) < Self.spacing }) else { break }
             x = neighbour.position.x + (x >= neighbour.position.x ? Self.spacing : -Self.spacing)
         }
-        let margin: CGFloat = 40
-        return min(max(x, margin), size.width - margin)
+        return min(max(x, home.lowerBound + 26), home.upperBound - 26)
     }
 
+    /// Keep x inside the wallpaper gap it is in (or the nearest one).
     private func clampX(_ x: CGFloat, for crab: CrabNode) -> CGFloat {
         let half = crab.size.width / 2 + 8
-        return min(max(x, half), size.width - half)
+        let r = range(containing: x)
+        return min(max(x, r.lowerBound + half), r.upperBound - half)
     }
 
+    /// While dragging, the whole floor is fair game (so you can carry a pet across the Dock).
     private func clamp(_ p: CGPoint, for crab: CrabNode) -> CGPoint {
         let half = crab.size.width / 2
         return CGPoint(x: min(max(p.x, half), size.width - half),
@@ -289,15 +334,23 @@ final class PlaypenScene: SKScene {
 
     /// Spread everyone out evenly and forget any "stay here" holds.
     func resetCrabs() {
-        let margin: CGFloat = 60
-        let step = crabs.count > 1 ? (size.width - 2 * margin) / CGFloat(crabs.count - 1) : 0
-        for (i, crab) in crabs.enumerated() {
-            crab.removeAction(forKey: "settle")
-            crab.wanderTarget = nil
-            crab.stopMoving()
-            crab.holdUntil = 0
-            crab.nextWanderAt = sceneTime + 2
-            crab.position = CGPoint(x: crabs.count == 1 ? size.width / 2 : margin + CGFloat(i) * step, y: floorY)
+        let ranges = allowedRanges
+        // Deal crabs across the gaps, widest gap first, evenly spaced inside each.
+        let ordered = ranges.sorted { ($0.upperBound - $0.lowerBound) > ($1.upperBound - $1.lowerBound) }
+        var buckets: [[CrabNode]] = Array(repeating: [], count: ordered.count)
+        for (i, crab) in crabs.enumerated() { buckets[i % ordered.count].append(crab) }
+        for (r, bucket) in zip(ordered, buckets) {
+            let inset: CGFloat = 40
+            let lo = r.lowerBound + inset, hi = r.upperBound - inset
+            let step = bucket.count > 1 ? (hi - lo) / CGFloat(bucket.count - 1) : 0
+            for (i, crab) in bucket.enumerated() {
+                crab.removeAction(forKey: "settle")
+                crab.wanderTarget = nil
+                crab.stopMoving()
+                crab.holdUntil = 0
+                crab.nextWanderAt = sceneTime + 2
+                crab.position = CGPoint(x: bucket.count == 1 ? (lo + hi) / 2 : lo + CGFloat(i) * step, y: floorY)
+            }
         }
     }
 
@@ -332,7 +385,8 @@ final class PlaypenScene: SKScene {
         crab.holdUntil = sceneTime + Self.holdAfterDrag
         crab.nextWanderAt = crab.holdUntil
         crab.restoreStatus()
-        let fall = SKAction.move(to: CGPoint(x: crab.position.x, y: floorY), duration: 0.25)
+        // Dropped over the Dock? Slide out to the nearest gap.
+        let fall = SKAction.move(to: CGPoint(x: clampX(crab.position.x, for: crab), y: floorY), duration: 0.25)
         fall.timingMode = .easeIn
         crab.run(fall, withKey: "settle")
     }

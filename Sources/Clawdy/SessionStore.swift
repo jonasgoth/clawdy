@@ -12,6 +12,7 @@ final class SessionStore {
     struct Row { let title: String; let status: CrabStatus }
 
     static let dormantAfter: TimeInterval = 600      // 10 minutes with no activity
+    static let hideAfterIdle: TimeInterval = 300     // idle this long → the pet leaves (menu still lists it)
     static let permissionGuessDelay: TimeInterval = 6
     static let bashPermissionDelay: TimeInterval = 600
     static let lookDuration: TimeInterval = 1.5      // how long the chat must be in front to count as seen
@@ -33,6 +34,7 @@ final class SessionStore {
     private var lastCoworkScan: Double = 0
     static let fallbackRescan: TimeInterval = 30
     private var seenDoneAt: [String: Double] = [:]   // session id → the finish time that has been seen
+    private var colorSlots: [String: Int] = [:]      // session id → palette index, unique while it lives
 
     /// Main-thread copy for the menu.
     private(set) var rows: [Row] = []
@@ -118,7 +120,12 @@ final class SessionStore {
             }
 
             let title = meta?.title ?? reader.title ?? session.name
-            let color = CrabPalette.color(for: session.projectName)
+            let color = ownColor(for: session.sessionId, liveIds: Set(live.map { $0.sessionId }))
+            let idleFor = status.isBusy ? 0 : now - (reader.lastEventTime == 0 ? now : reader.lastEventTime)
+            if !status.isBusy, !status.needsYou, idleFor > Self.hideAfterIdle {
+                newRows.append(Row(title: title, status: .dormant))   // listed, but the pet has left
+                continue
+            }
             snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: title, color: color, status: status))
             newRows.append(Row(title: title, status: status))
 
@@ -142,10 +149,15 @@ final class SessionStore {
             } else if status.isBusy {
                 seenDoneAt[session.sessionId] = nil
             }
-            let color = CrabPalette.color(for: session.projectName)
+            if !status.isBusy, !status.needsYou, now - session.lastActivity > Self.hideAfterIdle {
+                newRows.append(Row(title: session.title, status: .dormant))
+                continue
+            }
+            let color = ownColor(for: session.sessionId, liveIds: liveIds)
             snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: session.title, color: color, status: status))
             newRows.append(Row(title: session.title, status: status))
         }
+        for id in Set(colorSlots.keys).subtracting(liveIds) { colorSlots[id] = nil }
 
         if Self.debug {
             for c in snapshot.crabs where lastLogged[c.id] != c.status {
@@ -163,6 +175,16 @@ final class SessionStore {
             self.scene?.apply(snapshot)
             self.onUpdate?()
         }
+    }
+
+    /// Every live crab gets its own palette color: the least-used one when it first appears.
+    private func ownColor(for id: String, liveIds: Set<String>) -> NSColor {
+        if let slot = colorSlots[id] { return CrabPalette.colors[slot] }
+        var usage = [Int](repeating: 0, count: CrabPalette.colors.count)
+        for (other, slot) in colorSlots where liveIds.contains(other) { usage[slot] += 1 }
+        let slot = usage.indices.min(by: { usage[$0] != usage[$1] ? usage[$0] < usage[$1] : $0 < $1 }) ?? 0
+        colorSlots[id] = slot
+        return CrabPalette.colors[slot]
     }
 
     private func reader(for id: String) -> TranscriptReader {

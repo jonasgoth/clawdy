@@ -36,10 +36,19 @@ enum CrabPalette {
 final class CrabNode: SKNode {
     /// Pet frame cell shown at this many points (sheets are rendered at 2x).
     static let petSize: CGFloat = 120
-    /// The pet's body inside that cell (the rest is room for props and jumps).
-    static let petBody = CGSize(width: 52, height: 48)
-    static let petBodyBottom: CGFloat = 12
+    /// Measured from the sheets: the pet's shadow ends 21 of 240 px above the cell's bottom edge,
+    /// so anchoring there puts the node origin right under the shadow.
+    static let petAnchorY: CGFloat = 21.0 / 240.0
+    /// The standing body, relative to that origin: feet 3 pt up, 40 wide, 26 tall.
+    static let petBody = CGSize(width: 40, height: 26)
+    static let petBodyBottom: CGFloat = 3
+    /// Name tag height above the origin: clear of the props that float over the head.
+    static let petTagY: CGFloat = 48
+    /// A seen-and-done session is not worth reading, so its tag fades back to this much opacity.
+    static let restingTagAlpha: CGFloat = 0.35
     static let babyScale: CGFloat = 0.6
+    /// Status badges are off for now (the pet's pose already says it). Flip to bring them back.
+    static var badgesEnabled = false
 
     let id: String
     let isBaby: Bool
@@ -95,8 +104,8 @@ final class CrabNode: SKNode {
     var holdUntil: TimeInterval = 0
     private(set) var isMoving = false
 
-    /// Only relaxed or working crabs roam. Everything else stands where it is.
-    var canWander: Bool { !isBaby && (status == .working || status == .doneSeen) }
+    /// Only relaxed crabs roam. Working crabs (and everyone else) stand still and just animate.
+    var canWander: Bool { !isBaby && status == .doneSeen }
 
     init(id: String, isBaby: Bool = false) {
         self.id = id
@@ -110,7 +119,7 @@ final class CrabNode: SKNode {
             sprite.size = CGSize(width: CrabSprite.frameSize.width * scale,
                                  height: CrabSprite.frameSize.height * scale)
         }
-        sprite.anchorPoint = CGPoint(x: 0.5, y: 0)
+        sprite.anchorPoint = CGPoint(x: 0.5, y: usesPet ? Self.petAnchorY : 0)
         super.init()
         addChild(sprite)
         if !isBaby { buildNameTag() }
@@ -125,17 +134,19 @@ final class CrabNode: SKNode {
 
     private func buildNameTag() {
         nameLabel.fontName = "Menlo-Bold"
-        nameLabel.fontSize = 8
+        nameLabel.fontSize = 9.5
         nameLabel.fontColor = .white
         nameLabel.verticalAlignmentMode = .center
         nameLabel.horizontalAlignmentMode = .center
         nameLabel.zPosition = 2
         nameBackground.strokeColor = .clear
+        nameBackground.fillColor = NSColor.black.withAlphaComponent(0.62)
         nameBackground.zPosition = 1
-        nameBackground.alpha = 0.92
+        nameBackground.alpha = 1
         // Above the body, and above the props (brackets, wrenches, question marks) that float over it.
-        tagBaseY = usesPet ? Self.petBodyBottom + Self.petBody.height + 40 : sprite.size.height + 9
+        tagBaseY = usesPet ? Self.petTagY : sprite.size.height + 9
         tagNode.position = CGPoint(x: 0, y: tagBaseY)
+        tagNode.zPosition = 6
         tagNode.addChild(nameBackground)
         tagNode.addChild(nameLabel)
         addChild(tagNode)
@@ -145,10 +156,19 @@ final class CrabNode: SKNode {
         guard !isBaby else { return }
         let short = title.count > 22 ? String(title.prefix(21)) + "…" : title
         nameLabel.text = short
-        let w = max(nameLabel.frame.width + 12, 22), h: CGFloat = 13
+        let w = max(nameLabel.frame.width + 14, 24), h: CGFloat = 15
         tagWidth = w
         nameBackground.path = CGPath(roundedRect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h),
                                      cornerWidth: 4, cornerHeight: 4, transform: nil)
+    }
+
+    /// Dim the whole tag (pill + text) once the session is done and seen; full strength otherwise.
+    private func updateTagFade() {
+        guard !isBaby else { return }
+        let wanted: CGFloat = status == .doneSeen ? Self.restingTagAlpha : 1
+        guard abs(tagNode.alpha - wanted) > 0.01 else { return }
+        tagNode.removeAction(forKey: "fade")
+        tagNode.run(.fadeAlpha(to: wanted, duration: 0.45), withKey: "fade")
     }
 
     // MARK: - Badge
@@ -164,8 +184,8 @@ final class CrabNode: SKNode {
         badgeNode.addChild(badgeCircle)
         badgeNode.addChild(badgeSymbol)
         if usesPet {
-            badgeNode.position = CGPoint(x: Self.petBody.width * 0.5 + 2,
-                                         y: Self.petBodyBottom + Self.petBody.height - 4)
+            badgeNode.position = CGPoint(x: Self.petBody.width * 0.5 + 4,
+                                         y: Self.petBodyBottom + Self.petBody.height - 2)
         } else {
             badgeNode.position = CGPoint(x: sprite.size.width * 0.42, y: sprite.size.height - r * 0.5)
         }
@@ -175,7 +195,7 @@ final class CrabNode: SKNode {
     }
 
     private func updateBadge() {
-        guard let style = BadgeStyle.forStatus(status) else {
+        guard Self.badgesEnabled, let style = BadgeStyle.forStatus(status) else {
             badgeNode.isHidden = true
             badgeNode.removeAction(forKey: "pulse")
             return
@@ -196,7 +216,6 @@ final class CrabNode: SKNode {
     // MARK: - Color
 
     private func applyColor() {
-        nameBackground.fillColor = projectColor
         hueDegrees = CrabPalette.hueDegrees(of: projectColor)
         if !usesPet { tintedWalk = CrabSprite.walkTextures(hueDegrees: hueDegrees) }
         // Restart the current animation so it picks up the recolored frames.
@@ -209,7 +228,7 @@ final class CrabNode: SKNode {
         let old = status
         let changed = newStatus != status
         status = newStatus
-        if changed { updateBadge() }
+        if changed { updateBadge(); updateTagFade() }
         // A tool pause may finish the current walk (so a crab never stops on top of a neighbour);
         // any other non-roaming status stops it where it is.
         if changed, !canWander, newStatus != .usingTool { wanderTarget = nil; isMoving = false }
@@ -234,7 +253,7 @@ final class CrabNode: SKNode {
         let key: String
         switch status {
         case .working:         key = "working"
-        case .usingTool:       key = "usingTool"
+        case .usingTool:       key = "working"      // same animation as working, by request
         case .needsPermission: key = "needsPermission"
         case .needsQuestion:   key = "needsQuestion"
         case .doneUnseen:      key = "doneUnseen"

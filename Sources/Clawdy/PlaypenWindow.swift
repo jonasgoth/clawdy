@@ -67,24 +67,54 @@ final class PlaypenController {
         }
     }
 
-    /// Full width of the main screen, sitting just above the Dock.
+    /// Full width along the very bottom of the main screen — the same row as the Dock. The Dock
+    /// draws above us, and the scene keeps the pets out of its footprint (see updateDockZone).
     static func stripFrame() -> NSRect {
         let screen = NSScreen.main ?? NSScreen.screens[0]
-        let visible = screen.visibleFrame
-        return NSRect(x: visible.minX, y: visible.minY, width: visible.width, height: stripHeight)
+        let frame = screen.frame
+        return NSRect(x: frame.minX, y: frame.minY, width: frame.width, height: stripHeight)
+    }
+
+    /// Extra room kept between the pets and the Dock's edge.
+    static let dockMargin: CGFloat = 18
+    private var dockTimer: Timer?
+
+    /// Tell the scene which x-range the Dock occupies (in scene coordinates), if any.
+    func updateDockZone() {
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        guard let dock = DockGeometry.current(on: screen),
+              dock.rect.maxY > panel.frame.minY else {   // Dock not in our row → nothing to avoid
+            scene.blockedX = nil
+            return
+        }
+        let minX = dock.rect.minX - panel.frame.minX - Self.dockMargin
+        let maxX = dock.rect.maxX - panel.frame.minX + Self.dockMargin
+        if scene.blockedX != minX...maxX {
+            debugLog("dock zone \(dock.exact ? "exact" : "estimated"): x \(Int(dock.rect.minX))…\(Int(dock.rect.maxX)) (blocked \(Int(minX))…\(Int(maxX)))")
+        }
+        scene.blockedX = minX...maxX
     }
 
     var isVisible: Bool { panel.isVisible }
 
     func show() {
         reposition()
+        updateDockZone()
+        if dockTimer == nil {
+            let t = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in self?.updateDockZone() }
+            RunLoop.main.add(t, forMode: .common)
+            dockTimer = t
+        }
         panel.orderFrontRegardless()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.logCrabRect() }
     }
 
     func hide() { panel.orderOut(nil) }
 
-    func reposition() { panel.setFrame(Self.stripFrame(), display: true) }
+    func reposition() {
+        panel.setFrame(Self.stripFrame(), display: true)
+        updateDockZone()
+    }
 
     func updateMousePassthrough() {
         guard panel.isVisible else { return }
