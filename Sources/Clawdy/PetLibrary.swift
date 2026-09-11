@@ -14,6 +14,8 @@ enum PetLibrary {
     private static var rows = 4
     private(set) static var fps: Double = 8
     private static var sheets: [String: Sheet] = [:]
+    /// The "working:<pet>" keys, in rotation order — one working animation per session.
+    private static var workingKeys: [String] = []
     private static var sourceImages: [String: CGImage] = [:]
     private static var frameCache: [String: [SKTexture]] = [:]
     private static var loaded = false
@@ -30,6 +32,7 @@ enum PetLibrary {
               let data = try? Data(contentsOf: dir.appendingPathComponent("manifest.json")),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let states = obj["states"] as? [String: [String: Any]] else { return }
+        workingKeys = (obj["workingVariants"] as? [String]) ?? []
         cell = CGFloat((obj["cell"] as? Double) ?? 240)
         cols = (obj["cols"] as? Int) ?? 8
         rows = (obj["rows"] as? Int) ?? 4
@@ -38,6 +41,16 @@ enum PetLibrary {
             guard let file = info["file"] as? String, let frames = info["frames"] as? Int else { continue }
             sheets[state] = Sheet(file: file, frames: frames)
         }
+    }
+
+    /// The working animation this session keeps for life: a stable pick from the rotation,
+    /// so every crab has its own working personality but always the same one.
+    static func workingKey(for id: String) -> String {
+        load()
+        guard !workingKeys.isEmpty else { return "working" }
+        var hash: UInt64 = 7919
+        for byte in id.utf8 { hash = (hash &* 131) &+ UInt64(byte) }
+        return workingKeys[Int(hash % UInt64(workingKeys.count))]
     }
 
     /// Animation frames for a state key ("working", "moving", …) tinted to the given hue.

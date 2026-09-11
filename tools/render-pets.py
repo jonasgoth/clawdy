@@ -17,9 +17,7 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
 # state -> pet name (file is clawd-<name>.svg)
 STATES = {
-    "working": "coding",
     "moving": "crab-walking",
-    "usingTool": "working-tool-calling",
     "needsPermission": "praying",
     "needsQuestion": "confused",
     "doneUnseen": "celebrating",
@@ -28,6 +26,22 @@ STATES = {
     "error": "dizzy",
     "leaving": "going-away",
 }
+
+# A working crab picks one of these and keeps it for life, so each session has its own
+# working personality. Baked as states "working:<pet>"; the order is the rotation order.
+WORKING_PETS = [
+    "working-thinking",
+    "working-juggling",
+    "working-debugger",
+    "working-building",
+    "working-beacon",
+    "working-tool-calling",
+    "dj",
+    "working-firefighting",
+    "magic",
+]
+for _p in WORKING_PETS:
+    STATES[f"working:{_p}"] = _p
 CELL = 240          # px per frame (rendered 2x; shown at 120 pt)
 COLS, ROWS = 8, 4   # 32 frames
 LOOP_MS = 4000      # animation loop we sample
@@ -36,7 +50,8 @@ FPS = COLS * ROWS / (LOOP_MS / 1000)
 def main():
     src = sys.argv[1] if len(sys.argv) > 1 else SRC_VENDOR
     os.makedirs(SRC_VENDOR, exist_ok=True)
-    manifest = {"cell": CELL, "cols": COLS, "rows": ROWS, "fps": FPS, "states": {}}
+    manifest = {"cell": CELL, "cols": COLS, "rows": ROWS, "fps": FPS,
+                "workingVariants": [f"working:{p}" for p in WORKING_PETS], "states": {}}
     with tempfile.TemporaryDirectory() as tmp:
         for state, pet in STATES.items():
             svg_path = os.path.join(src, f"clawd-{pet}.svg")
@@ -57,16 +72,17 @@ document.querySelectorAll('.c').forEach(c => {{
   for (const a of c.getAnimations({{subtree: true}})) {{ a.pause(); a.currentTime = t; }}
 }});
 </script></body></html>"""
-            page = os.path.join(tmp, f"{state}.html")
+            name = state.replace(":", "-")
+            page = os.path.join(tmp, f"{name}.html")
             open(page, "w").write(html)
-            out_png = os.path.join(OUT, f"{state}.png")
+            out_png = os.path.join(OUT, f"{name}.png")
             subprocess.run([CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars",
                             "--default-background-color=00000000",
                             f"--window-size={CELL*COLS},{CELL*ROWS}", "--virtual-time-budget=600",
                             f"--screenshot={out_png}", f"file://{page}"],
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            manifest["states"][state] = {"file": f"{state}.png", "pet": pet, "frames": n}
-            print(f"  {state:16} <- clawd-{pet}.svg  ({os.path.getsize(out_png)//1024} KB)")
+            manifest["states"][state] = {"file": f"{name}.png", "pet": pet, "frames": n}
+            print(f"  {state:28} <- clawd-{pet}.svg  ({os.path.getsize(out_png)//1024} KB)")
     json.dump(manifest, open(os.path.join(OUT, "manifest.json"), "w"), indent=2)
     print("wrote manifest.json")
 

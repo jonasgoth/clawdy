@@ -43,7 +43,7 @@ final class CrabNode: SKNode {
     static let petBody = CGSize(width: 40, height: 26)
     static let petBodyBottom: CGFloat = 3
     /// Name tag height above the origin: clear of the props that float over the head.
-    static let petTagY: CGFloat = 48
+    static let petTagY: CGFloat = 58
     /// A seen-and-done session is not worth reading, so its tag fades back to this much opacity.
     static let restingTagAlpha: CGFloat = 0.35
     static let babyScale: CGFloat = 0.6
@@ -65,6 +65,8 @@ final class CrabNode: SKNode {
 
     private var status: CrabStatus = .working
     private var hueDegrees: CGFloat = PetLibrary.baseHueDegrees
+    /// This crab's own working animation, picked once from the rotation and kept for life.
+    private lazy var workingPetKey: String = PetLibrary.workingKey(for: id)
     // Pixel-crab textures (babies, or fallback when pet sheets are missing).
     private var tintedWalk: [SKTexture] = CrabSprite.walkTextures
     private var tintedIdle: SKTexture { tintedWalk.first ?? CrabSprite.idleTexture }
@@ -252,8 +254,8 @@ final class CrabNode: SKNode {
     private func petGait() {
         let key: String
         switch status {
-        case .working:         key = "working"
-        case .usingTool:       key = "working"      // same animation as working, by request
+        case .working:         key = workingPetKey
+        case .usingTool:       key = workingPetKey  // same animation as working, by request
         case .needsPermission: key = "needsPermission"
         case .needsQuestion:   key = "needsQuestion"
         case .doneUnseen:      key = "doneUnseen"

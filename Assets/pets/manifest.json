@@ -3,20 +3,21 @@
   "cols": 8,
   "rows": 4,
   "fps": 8.0,
+  "workingVariants": [
+    "working:working-thinking",
+    "working:working-juggling",
+    "working:working-debugger",
+    "working:working-building",
+    "working:working-beacon",
+    "working:working-tool-calling",
+    "working:dj",
+    "working:working-firefighting",
+    "working:magic"
+  ],
   "states": {
-    "working": {
-      "file": "working.png",
-      "pet": "coding",
-      "frames": 32
-    },
     "moving": {
       "file": "moving.png",
       "pet": "crab-walking",
-      "frames": 32
-    },
-    "usingTool": {
-      "file": "usingTool.png",
-      "pet": "working-tool-calling",
       "frames": 32
     },
     "needsPermission": {
@@ -52,6 +53,51 @@
     "leaving": {
       "file": "leaving.png",
       "pet": "going-away",
+      "frames": 32
+    },
+    "working:working-thinking": {
+      "file": "working-working-thinking.png",
+      "pet": "working-thinking",
+      "frames": 32
+    },
+    "working:working-juggling": {
+      "file": "working-working-juggling.png",
+      "pet": "working-juggling",
+      "frames": 32
+    },
+    "working:working-debugger": {
+      "file": "working-working-debugger.png",
+      "pet": "working-debugger",
+      "frames": 32
+    },
+    "working:working-building": {
+      "file": "working-working-building.png",
+      "pet": "working-building",
+      "frames": 32
+    },
+    "working:working-beacon": {
+      "file": "working-working-beacon.png",
+      "pet": "working-beacon",
+      "frames": 32
+    },
+    "working:working-tool-calling": {
+      "file": "working-working-tool-calling.png",
+      "pet": "working-tool-calling",
+      "frames": 32
+    },
+    "working:dj": {
+      "file": "working-dj.png",
+      "pet": "dj",
+      "frames": 32
+    },
+    "working:working-firefighting": {
+      "file": "working-working-firefighting.png",
+      "pet": "working-firefighting",
+      "frames": 32
+    },
+    "working:magic": {
+      "file": "working-magic.png",
+      "pet": "magic",
       "frames": 32
     }
   }
