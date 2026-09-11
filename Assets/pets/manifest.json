@@ -1,0 +1,58 @@
+{
+  "cell": 240,
+  "cols": 8,
+  "rows": 4,
+  "fps": 8.0,
+  "states": {
+    "working": {
+      "file": "working.png",
+      "pet": "coding",
+      "frames": 32
+    },
+    "moving": {
+      "file": "moving.png",
+      "pet": "crab-walking",
+      "frames": 32
+    },
+    "usingTool": {
+      "file": "usingTool.png",
+      "pet": "working-tool-calling",
+      "frames": 32
+    },
+    "needsPermission": {
+      "file": "needsPermission.png",
+      "pet": "praying",
+      "frames": 32
+    },
+    "needsQuestion": {
+      "file": "needsQuestion.png",
+      "pet": "confused",
+      "frames": 32
+    },
+    "doneUnseen": {
+      "file": "doneUnseen.png",
+      "pet": "celebrating",
+      "frames": 32
+    },
+    "doneSeen": {
+      "file": "doneSeen.png",
+      "pet": "idle-living",
+      "frames": 32
+    },
+    "dormant": {
+      "file": "dormant.png",
+      "pet": "sleeping",
+      "frames": 32
+    },
+    "error": {
+      "file": "error.png",
+      "pet": "dizzy",
+      "frames": 32
+    },
+    "leaving": {
+      "file": "leaving.png",
+      "pet": "going-away",
+      "frames": 32
+    }
+  }
+}

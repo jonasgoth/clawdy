@@ -8,7 +8,7 @@ final class PlaypenScene: SKScene {
     /// How far from the herd's center a crab will roam (grows a little with the herd).
     static let baseHerdSpread: CGFloat = 160
     /// Minimum breathing room between crabs.
-    static let spacing: CGFloat = 84
+    static let spacing: CGFloat = 96
     /// After you drop a crab it stays put this long before rejoining the herd.
     static let holdAfterDrag: TimeInterval = 45
 
@@ -249,13 +249,18 @@ final class PlaypenScene: SKScene {
     // MARK: - Placement
 
     private func walkOff(_ crab: CrabNode, id: String) {
-        let exitX: CGFloat = crab.position.x < size.width / 2 ? -crab.size.width : size.width + crab.size.width
-        crab.facingRight = exitX > crab.position.x
-        crab.showDragging()
-        let walk = SKAction.move(to: CGPoint(x: exitX, y: floorY),
-                                 duration: TimeInterval(abs(exitX - crab.position.x) / 220))
-        crab.run(.sequence([walk, .fadeOut(withDuration: 0.15), .removeFromParent(),
-                            .run { [weak self] in self?.leaving.remove(id) }]))
+        // The going-away pet walks itself out of frame; afterwards the node fades and is removed.
+        crab.showLeaving { [weak self, weak crab] in
+            guard let crab else { self?.leaving.remove(id); return }
+            crab.run(.sequence([.fadeOut(withDuration: 0.2), .removeFromParent(),
+                                .run { [weak self] in self?.leaving.remove(id) }]))
+        }
+        if !PetLibrary.isAvailable || crab.isBaby {
+            let exitX: CGFloat = crab.position.x < size.width / 2 ? -crab.size.width : size.width + crab.size.width
+            crab.facingRight = exitX > crab.position.x
+            crab.run(.move(to: CGPoint(x: exitX, y: floorY),
+                           duration: TimeInterval(abs(exitX - crab.position.x) / 220)), withKey: "exit")
+        }
     }
 
     /// New crabs arrive near the herd, not at the far edges.

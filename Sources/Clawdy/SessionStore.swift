@@ -27,6 +27,11 @@ final class SessionStore {
     private let desktopMeta = DesktopMetaIndex()
     private let cowork = CoworkWatcher()
     private var ttyByPid: [Int: String?] = [:]
+    private let watcher = FileWatcher(roots: [DesktopMetaIndex.baseDir, CoworkWatcher.baseDir])
+    private var coworkCache: [CoworkWatcher.Session] = []
+    private var lastDesktopScan: Double = 0
+    private var lastCoworkScan: Double = 0
+    static let fallbackRescan: TimeInterval = 30
     private var seenDoneAt: [String: Double] = [:]   // session id → the finish time that has been seen
 
     /// Main-thread copy for the menu.
@@ -47,6 +52,7 @@ final class SessionStore {
     }
 
     func start() {
+        watcher.start(queue: queue)
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: 1.0, leeway: .milliseconds(100))
         t.setEventHandler { [weak self] in self?.tick() }
@@ -67,8 +73,16 @@ final class SessionStore {
         let look = seen.snapshot()
         let hooks = HookBridge.scan()
         let live = SessionRegistry.scan()
-        desktopMeta.refresh(now: now)
-        let coworkSessions = cowork.scan(now: now)
+        // Folder trees are only rescanned when FSEvents saw a change (plus a slow safety rescan).
+        if watcher.consume(DesktopMetaIndex.baseDir) || now - lastDesktopScan > Self.fallbackRescan {
+            desktopMeta.refresh(now: now)
+            lastDesktopScan = now
+        }
+        if watcher.consume(CoworkWatcher.baseDir) || now - lastCoworkScan > Self.fallbackRescan {
+            coworkCache = cowork.scan(now: now)
+            lastCoworkScan = now
+        }
+        let coworkSessions = coworkCache
 
         let wantsTTY = live.contains { $0.entrypoint == "cli" }
         DispatchQueue.main.async { [seen] in seen.wantsTerminalTTY = wantsTTY }

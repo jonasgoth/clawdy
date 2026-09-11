@@ -144,7 +144,7 @@ Why Swift, not Electron: both inspiration apps are Swift. Overlay windows, click
 
 ## 6. Build order (each step is something you can see)
 
-Status: Phase 4 done. Run `./build.sh --run`. Optional menu items: "Turn on instant updates" (installs hooks) and "Allow window checks" (Accessibility, for Cowork seen-detection). Debug: `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy` logs status changes, seen-rule inputs and slow ticks. Debug the click-through with `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy`.
+Status: all five phases done. Run `./build.sh --run`; `tools/make-dmg.sh` makes the installer; `tools/render-pets.py` re-bakes the pets. Optional menu items: "Turn on instant updates" (installs hooks) and "Allow window checks" (Accessibility, for Cowork seen-detection). Debug: `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy` logs status changes, seen-rule inputs and slow ticks. Debug the click-through with `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy`.
 
 **Phase 0 — Skeleton (day 1)** ✅ done 2026-09-12
 Swift package + build script. Menu bar icon. Empty see-through strip along the bottom of the screen. One static crab you can drag. Prove clicks pass through to apps behind it.
@@ -161,7 +161,7 @@ The rule in section 4. Test: finish a chat while looking at it, while on another
 **Phase 4 — Personality (week 2)** ✅ done 2026-09-12
 Wander AI. Crabs stay loosely together. Jump, celebrate, sleep, wave. Optional sound. Menu bar count.
 
-**Phase 5 — Ship (week 3)**
+**Phase 5 — Ship (week 3)** ✅ done 2026-09-12 (art = Clawd pets from clawd-pet, per Jonas; notarization needs an Apple Developer account, see tools/make-dmg.sh)
 Own crab art. App icon. Sign and notarize. DMG + Homebrew cask. README. MIT license. "Not affiliated" note.
 
 ---
@@ -204,7 +204,7 @@ Own crab art. App icon. Sign and notarize. DMG + Homebrew cask. README. MIT lice
 ## 10. Decisions
 
 **Decided by Jonas on 2026-09-12:**
-- A. Crab art: reuse the pixel Clawd crab for the prototype. Draw our own before public release.
+- A. Crab art: session crabs use the animated Clawd pets from https://clawd-pet.vercel.app (MIT, baked to frame sheets). Sub-agent baby crabs keep the pixel crab. (Changed by Jonas 2026-09-12.)
 - B. Where crabs live: on top of all windows, in a see-through strip. Click-through except on crabs.
 
 **I made for you** (say so if you disagree):

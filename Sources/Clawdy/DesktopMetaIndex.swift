@@ -25,17 +25,14 @@ final class DesktopMetaIndex {
     private var lastListing: Double = 0
     private var files: [String] = []
 
-    /// Refresh (cheap: stats only, unless something changed). Call from the background queue.
+    /// Rescan: relist the folder, re-read only files whose mtime changed. The caller only invokes
+    /// this when FSEvents reported a change (or as a slow fallback), so it is rarely called.
     func refresh(now: Double) {
-        let fm = FileManager.default
-        if now - lastListing > 3 {
-            lastListing = now
-            files = Self.listMetadataFiles()
-        }
+        lastListing = now
+        files = Self.listMetadataFiles()
         var changed = false
         for path in files {
-            guard let attrs = try? fm.attributesOfItem(atPath: path),
-                  let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else { continue }
+            guard let mtime = FileStat.mtime(path) else { continue }
             if let cached = cache[path], cached.mtime == mtime { continue }
             cache[path] = (mtime, Self.parse(path))
             changed = true

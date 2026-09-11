@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    static let version = "0.4.0"
+    static let version = "0.5.0"
 
     private var statusItem: NSStatusItem!
     private var playpen: PlaypenController!

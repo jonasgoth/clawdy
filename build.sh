@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="0.1.0"
+VERSION="0.5.0"
 APP="build/Clawdy.app"
 
 echo "Compiling Clawdy…"
@@ -15,6 +15,10 @@ BIN=".build/release/Clawdy"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Clawdy"
+# Animated Clawd pets (frame sheets baked by tools/render-pets.py).
+mkdir -p "$APP/Contents/Resources/pets"
+cp Assets/pets/*.png Assets/pets/manifest.json "$APP/Contents/Resources/pets/"
+cp Assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -31,6 +35,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>NSHumanReadableCopyright</key><string>MIT. Unofficial; not affiliated with Anthropic.</string>
 </dict>
 </plist>
 PLIST

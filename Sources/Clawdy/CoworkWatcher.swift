@@ -28,18 +28,14 @@ final class CoworkWatcher {
     private var metaCache: [String: (mtime: Double, title: String, cliId: String?, archived: Bool)] = [:]
 
     func scan(now: Double) -> [Session] {
-        let fm = FileManager.default
-        if now - lastListing > 5 {
-            lastListing = now
-            files = Self.listMetadataFiles()
-        }
+        lastListing = now
+        files = Self.listMetadataFiles()
         var out: [Session] = []
         for meta in files {
             // Stat the audit log first; skip everything that isn't fresh.
             let folder = String(meta.dropLast(5))
             let audit = "\(folder)/audit.jsonl"
-            guard let auditAttrs = try? fm.attributesOfItem(atPath: audit),
-                  let auditMtime = (auditAttrs[.modificationDate] as? Date)?.timeIntervalSince1970,
+            guard let auditMtime = FileStat.mtime(audit),
                   now - auditMtime <= Self.liveWindow else { continue }
 
             guard let m = cachedMeta(meta), !m.archived else { continue }
@@ -54,8 +50,7 @@ final class CoworkWatcher {
 
     private func cachedMeta(_ path: String) -> (mtime: Double, title: String, cliId: String?, archived: Bool)? {
         let fm = FileManager.default
-        guard let attrs = try? fm.attributesOfItem(atPath: path),
-              let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else { return nil }
+        guard let mtime = FileStat.mtime(path) else { return nil }
         if let cached = metaCache[path], cached.mtime == mtime { return cached }
         guard let data = fm.contents(atPath: path),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }

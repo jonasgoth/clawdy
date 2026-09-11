@@ -16,7 +16,7 @@ final class PlaypenView: SKView {
 /// unless the cursor is on a crab or a drag is in progress, so clicks on empty strip
 /// go straight through to whatever app is behind it.
 final class PlaypenController {
-    static let stripHeight: CGFloat = 130
+    static let stripHeight: CGFloat = 175
 
     let panel: PlaypenPanel
     let skView: PlaypenView

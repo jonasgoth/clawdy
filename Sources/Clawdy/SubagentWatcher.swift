@@ -12,8 +12,7 @@ enum SubagentWatcher {
         var out: [String] = []
         for file in files where file.hasPrefix("agent-") && file.hasSuffix(".jsonl") {
             let path = (directory as NSString).appendingPathComponent(file)
-            guard let attrs = try? fm.attributesOfItem(atPath: path),
-                  let modified = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 else { continue }
+            guard let modified = FileStat.mtime(path) else { continue }
             if now - modified <= activeWindow {
                 out.append(String(file.dropLast(6)))   // strip ".jsonl"
             }

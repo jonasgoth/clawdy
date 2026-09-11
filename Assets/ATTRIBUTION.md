@@ -1,11 +1,23 @@
 # Asset attribution
 
-**crab-walk-strip.png** — 20-frame pixel-art crab walk cycle, 51×36 px per frame.
-Frames extracted from `Sources/CrabFrames.swift` in
-[m1ckc3s/claude-status-bar](https://github.com/m1ckc3s/claude-status-bar) (MIT),
-which generated them from `Clawd-CrabWalking.gif`.
+## Session crabs: Clawd pets
+`Assets/pets/src/*.svg` are animated SVGs from
+[abderrahimghazali/clawd-pet](https://github.com/abderrahimghazali/clawd-pet) (MIT, © 2026 Abderrahim Ghazali),
+also browsable at https://clawd-pet.vercel.app. `tools/render-pets.py` bakes them into the frame
+sheets in `Assets/pets/*.png` (headless Chrome + the Web Animations API). The app icon is the
+"happy" pet on a rounded square.
 
-The crab is "Clawd", Anthropic's mascot. Anthropic owns that design and the Claude
-trademarks. Clawdy is an unofficial side project, not affiliated with or endorsed by
-Anthropic. The MIT license covers this repository's code only and conveys no rights to
-Anthropic's trademarks or artwork. Plan: draw an original crab before public release.
+State → pet: working = coding · moving = crab-walking · tool = working-tool-calling ·
+permission = praying · question = confused · done = celebrating · done & seen = idle-living ·
+dormant = sleeping · error = dizzy · leaving = going-away.
+
+## Sub-agent baby crabs: pixel crab
+`Assets/crab-walk-strip.png` — 20-frame pixel-art crab walk cycle, 51×36 px per frame, extracted
+from `Sources/CrabFrames.swift` in [m1ckc3s/claude-status-bar](https://github.com/m1ckc3s/claude-status-bar)
+(MIT), which generated them from `Clawd-CrabWalking.gif`.
+
+## Trademarks
+"Clawd" is Anthropic's mascot and "Claude" is Anthropic's trademark. Anthropic owns those designs
+and marks. Clawdy is an unofficial side project, not affiliated with or endorsed by Anthropic.
+The MIT license covers this repository's code only and conveys no rights to Anthropic's
+trademarks or artwork.
