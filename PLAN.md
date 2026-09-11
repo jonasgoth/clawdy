@@ -144,7 +144,7 @@ Why Swift, not Electron: both inspiration apps are Swift. Overlay windows, click
 
 ## 6. Build order (each step is something you can see)
 
-Status: Phase 3 done. Run `./build.sh --run`. Optional menu items: "Turn on instant updates" (installs hooks) and "Allow window checks" (Accessibility, for Cowork seen-detection). Debug: `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy` logs status changes, seen-rule inputs and slow ticks. Debug the click-through with `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy`.
+Status: Phase 4 done. Run `./build.sh --run`. Optional menu items: "Turn on instant updates" (installs hooks) and "Allow window checks" (Accessibility, for Cowork seen-detection). Debug: `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy` logs status changes, seen-rule inputs and slow ticks. Debug the click-through with `CLAWDY_DEBUG=1 build/Clawdy.app/Contents/MacOS/Clawdy`.
 
 **Phase 0 — Skeleton (day 1)** ✅ done 2026-09-12
 Swift package + build script. Menu bar icon. Empty see-through strip along the bottom of the screen. One static crab you can drag. Prove clicks pass through to apps behind it.
@@ -158,7 +158,7 @@ Full state table. Badges. Hook installer for instant permission/done. Cowork via
 **Phase 3 — Seen rule (days 6–7)** ✅ done 2026-09-12
 The rule in section 4. Test: finish a chat while looking at it, while on another chat, while in Chrome, while screen locked.
 
-**Phase 4 — Personality (week 2)**
+**Phase 4 — Personality (week 2)** ✅ done 2026-09-12
 Wander AI. Crabs stay loosely together. Jump, celebrate, sleep, wave. Optional sound. Menu bar count.
 
 **Phase 5 — Ship (week 3)**

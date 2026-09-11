@@ -60,6 +60,31 @@ final class CrabNode: SKNode {
         let s = sprite.size
         return CGRect(x: position.x - s.width / 2, y: position.y, width: s.width, height: s.height)
     }
+    var currentStatus: CrabStatus { status }
+
+    /// Width of the name tag, so the scene can keep neighbours' tags from overlapping.
+    private(set) var tagWidth: CGFloat = 22
+    /// 0 = normal height; higher levels lift the tag so it clears a close neighbour's tag.
+    var tagLevel = 0 {
+        didSet {
+            guard tagLevel != oldValue else { return }
+            let y = sprite.size.height + 9 + CGFloat(tagLevel) * 15
+            tagNode.removeAllActions()
+            tagNode.run(.moveTo(y: y, duration: 0.15))
+        }
+    }
+
+    // MARK: Wander state (driven by PlaypenScene)
+
+    /// Where the crab is walking to, if anywhere. Scene time units for the timestamps.
+    var wanderTarget: CGFloat?
+    var nextWanderAt: TimeInterval = 0
+    /// After you drag a crab somewhere it stays put until this scene time, then rejoins the herd.
+    var holdUntil: TimeInterval = 0
+    private(set) var isMoving = false
+
+    /// Only relaxed or working crabs roam. Everything else stands where it is.
+    var canWander: Bool { !isBaby && (status == .working || status == .doneSeen) }
 
     init(id: String, isBaby: Bool = false) {
         self.id = id
@@ -102,6 +127,7 @@ final class CrabNode: SKNode {
         let short = title.count > 22 ? String(title.prefix(21)) + "…" : title
         nameLabel.text = short
         let w = max(nameLabel.frame.width + 12, 22), h: CGFloat = 13
+        tagWidth = w
         nameBackground.path = CGPath(roundedRect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h),
                                      cornerWidth: 4, cornerHeight: 4, transform: nil)
     }
@@ -118,7 +144,6 @@ final class CrabNode: SKNode {
         badgeSymbol.size = CGSize(width: r * 1.4, height: r * 1.4)
         badgeNode.addChild(badgeCircle)
         badgeNode.addChild(badgeSymbol)
-        // Top-right shoulder of the crab.
         badgeNode.position = CGPoint(x: sprite.size.width * 0.42, y: sprite.size.height - r * 0.5)
         badgeNode.zPosition = 5
         badgeNode.isHidden = true
@@ -134,7 +159,6 @@ final class CrabNode: SKNode {
         badgeNode.isHidden = false
         badgeCircle.fillColor = style.color
         badgeSymbol.texture = BadgeIcon.texture(style.symbol, pointSize: isBaby ? 8 : 11)
-        // Attention badges pulse; quiet ones (done, dormant, tool) sit still.
         badgeNode.removeAction(forKey: "pulse")
         if status.needsYou {
             let pulse = SKAction.sequence([.scale(to: 1.18, duration: 0.5), .scale(to: 1.0, duration: 0.5)])
@@ -150,33 +174,38 @@ final class CrabNode: SKNode {
     private func applyColor() {
         nameBackground.fillColor = projectColor
         tintedWalk = CrabSprite.walkTextures(hueDegrees: CrabPalette.hueDegrees(of: projectColor))
-        // Restart the current gait so it picks up the recolored frames, even if the status is
-        // unchanged (otherwise a still-marching crab keeps its old color).
-        applyGait(force: true)
+        // Restart the current gait so it picks up the recolored frames.
+        if isMoving { march(timePerFrame: status == .working ? 0.07 : 0.1) } else { applyGait(force: true) }
     }
 
     // MARK: - Status + animation
 
     func setStatus(_ newStatus: CrabStatus) {
+        let old = status
         let changed = newStatus != status
         status = newStatus
         if changed { updateBadge() }
-        applyGait(force: changed || sprite.action(forKey: "gait") == nil)
+        // A tool pause may finish the current walk (so a crab never stops on top of a neighbour);
+        // any other non-roaming status stops it where it is.
+        if changed, !canWander, newStatus != .usingTool { wanderTarget = nil; isMoving = false }
+        if !isMoving { applyGait(force: changed || sprite.action(forKey: "gait") == nil) }
+        if changed, newStatus == .doneUnseen, old.isBusy { celebrate() }
     }
 
     private func applyGait(force: Bool) {
         guard force else { return }
         sprite.removeAction(forKey: "gait")
         removeAction(forKey: "hop")
+        removeAction(forKey: "zzz")
         sprite.position = .zero
         sprite.zRotation = 0
+        sprite.yScale = 1
         sprite.alpha = 1
 
         switch status {
         case .working:
             march(timePerFrame: 0.07)
         case .usingTool:
-            // Paused, holding a tool. Legs still, gentle breathing.
             sprite.texture = tintedIdle
             breathe()
         case .needsPermission, .needsQuestion:
@@ -191,7 +220,7 @@ final class CrabNode: SKNode {
             breathe()
         case .dormant:
             sprite.texture = tintedIdle
-            sprite.alpha = 0.55
+            sleep()
         case .error:
             sprite.texture = tintedIdle
             dizzy()
@@ -199,6 +228,8 @@ final class CrabNode: SKNode {
     }
 
     private func march(timePerFrame: TimeInterval) {
+        sprite.removeAction(forKey: "gait")
+        sprite.position = .zero
         let walk = SKAction.animate(with: tintedWalk, timePerFrame: timePerFrame, resize: false, restore: false)
         sprite.run(.repeatForever(walk), withKey: "gait")
     }
@@ -212,14 +243,12 @@ final class CrabNode: SKNode {
     private func jump() {
         let up = SKAction.moveBy(x: 0, y: 10, duration: 0.22); up.timingMode = .easeOut
         let down = SKAction.moveBy(x: 0, y: -10, duration: 0.22); down.timingMode = .easeIn
-        let pause = SKAction.wait(forDuration: 0.25)
-        sprite.run(.repeatForever(.sequence([up, down, pause])), withKey: "gait")
+        sprite.run(.repeatForever(.sequence([up, down, .wait(forDuration: 0.25)])), withKey: "gait")
     }
 
     private func occasionalHop() {
         let hop = SKAction.sequence([.moveBy(x: 0, y: 7, duration: 0.18), .moveBy(x: 0, y: -7, duration: 0.18)])
-        let wait = SKAction.wait(forDuration: 3.0, withRange: 2.0)
-        run(.repeatForever(.sequence([wait, hop])), withKey: "hop")
+        run(.repeatForever(.sequence([.wait(forDuration: 3.0, withRange: 2.0), hop])), withKey: "hop")
     }
 
     private func dizzy() {
@@ -229,22 +258,76 @@ final class CrabNode: SKNode {
         sprite.run(.repeatForever(wobble), withKey: "gait")
     }
 
-    // MARK: - Dragging
+    /// Asleep: squashed flat, dimmed, with a little "z" floating up now and then.
+    private func sleep() {
+        sprite.alpha = 0.55
+        sprite.yScale = 0.72
+        let spawnZ = SKAction.run { [weak self] in self?.floatZ() }
+        run(.repeatForever(.sequence([.wait(forDuration: 2.4, withRange: 1.2), spawnZ])), withKey: "zzz")
+    }
+
+    private func floatZ() {
+        let z = SKLabelNode(text: "z")
+        z.fontName = "Menlo-Bold"
+        z.fontSize = isBaby ? 7 : 9
+        z.fontColor = BadgeStyle.Palette.sleep
+        z.position = CGPoint(x: sprite.size.width * 0.25, y: sprite.size.height * 0.6)
+        z.zPosition = 4
+        addChild(z)
+        let drift = SKAction.group([.moveBy(x: 6, y: 16, duration: 1.6), .fadeOut(withDuration: 1.6)])
+        drift.timingMode = .easeOut
+        z.run(.sequence([drift, .removeFromParent()]))
+    }
+
+    /// Two quick hops with a wiggle. Plays when a session finishes its work.
+    func celebrate() {
+        removeAction(forKey: "celebrate")
+        let hop = SKAction.sequence([.moveBy(x: 0, y: 12, duration: 0.15), .moveBy(x: 0, y: -12, duration: 0.15)])
+        hop.timingMode = .easeOut
+        let wiggle = SKAction.sequence([.rotate(toAngle: 0.18, duration: 0.08),
+                                        .rotate(toAngle: -0.18, duration: 0.16),
+                                        .rotate(toAngle: 0, duration: 0.08)])
+        run(.sequence([.group([hop, .run { [weak self] in self?.sprite.run(wiggle) }]),
+                       .wait(forDuration: 0.1), hop]), withKey: "celebrate")
+    }
+
+    /// A quick side-to-side wiggle, like a wave. Plays when a crab arrives.
+    func wave() {
+        let wiggle = SKAction.sequence([.rotate(toAngle: 0.2, duration: 0.1),
+                                        .rotate(toAngle: -0.2, duration: 0.2),
+                                        .rotate(toAngle: 0.2, duration: 0.2),
+                                        .rotate(toAngle: 0, duration: 0.1)])
+        sprite.run(wiggle, withKey: "wave")
+    }
+
+    // MARK: - Moving (wander) and dragging
+
+    func startMoving() {
+        guard !isMoving else { return }
+        isMoving = true
+        removeAction(forKey: "hop")
+        march(timePerFrame: status == .working ? 0.07 : 0.1)
+    }
+
+    func stopMoving() {
+        guard isMoving else { return }
+        isMoving = false
+        applyGait(force: true)
+    }
 
     func showDragging() {
-        status = .working
-        updateBadge()
-        sprite.removeAction(forKey: "gait")
+        wanderTarget = nil
+        isMoving = false
         removeAction(forKey: "hop")
-        sprite.position = .zero
+        removeAction(forKey: "zzz")
+        removeAction(forKey: "celebrate")
         sprite.zRotation = 0
+        sprite.yScale = 1
         sprite.alpha = 1
         march(timePerFrame: 0.05)
     }
 
     func restoreStatus() {
-        let s = status
-        status = .working
-        setStatus(s)
+        applyGait(force: true)
     }
 }

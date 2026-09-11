@@ -31,6 +31,8 @@ final class SessionStore {
 
     /// Main-thread copy for the menu.
     private(set) var rows: [Row] = []
+    /// Called on the main thread after every update (menu bar count, etc.).
+    var onUpdate: (() -> Void)?
 
     private static let debug = ProcessInfo.processInfo.environment["CLAWDY_DEBUG"] == "1"
     private var lastLogged: [String: CrabStatus] = [:]
@@ -145,6 +147,7 @@ final class SessionStore {
             guard let self else { return }
             self.rows = newRows
             self.scene?.apply(snapshot)
+            self.onUpdate?()
         }
     }
 

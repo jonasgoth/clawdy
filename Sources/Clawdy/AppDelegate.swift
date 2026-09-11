@@ -2,7 +2,7 @@ import AppKit
 import ApplicationServices
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    static let version = "0.3.0"
+    static let version = "0.4.0"
 
     private var statusItem: NSStatusItem!
     private var playpen: PlaypenController!
@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let toggleItem = NSMenuItem(title: "Hide playpen", action: #selector(togglePlaypen), keyEquivalent: "")
     private let hooksItem = NSMenuItem(title: "Turn on instant updates…", action: #selector(toggleHooks), keyEquivalent: "")
     private let axItem = NSMenuItem(title: "Allow window checks…", action: #selector(requestAccessibility), keyEquivalent: "")
+    private let soundItem = NSMenuItem(title: "Sounds", action: #selector(toggleSounds), keyEquivalent: "")
     private var sessionSeparatorTop: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -46,12 +47,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(hooksItem)
         axItem.target = self
         menu.addItem(axItem)
+        soundItem.target = self
+        menu.addItem(soundItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Clawdy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
+        store.onUpdate = { [weak self] in self?.updateStatusItem() }
         playpen.show()
         store.start()
+    }
+
+    /// Menu bar shows how many crabs are alive; turns red with a "!" when one needs you.
+    private func updateStatusItem() {
+        guard let button = statusItem.button else { return }
+        let rows = store.rows
+        let attention = rows.contains { $0.status.needsYou }
+        let text = rows.isEmpty ? "" : (attention ? " \(rows.count)!" : " \(rows.count)")
+        let color: NSColor = attention ? .systemRed : .labelColor
+        button.attributedTitle = NSAttributedString(string: text, attributes: [
+            .foregroundColor: color,
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: attention ? .bold : .medium),
+        ])
+        button.imagePosition = .imageLeading
+    }
+
+    @objc private func toggleSounds() {
+        SoundPlayer.enabled.toggle()
+        soundItem.state = SoundPlayer.enabled ? .on : .off
     }
 
     func menuWillOpen(_ menu: NSMenu) { rebuildSessionRows() }
@@ -105,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             : "\(rows.count) session\(rows.count == 1 ? "" : "s") running"
         toggleItem.title = playpen.isVisible ? "Hide playpen" : "Show playpen"
         hooksItem.title = HookInstaller.isInstalled ? "Turn off instant updates" : "Turn on instant updates…"
+        soundItem.state = SoundPlayer.enabled ? .on : .off
         let trusted = AXIsProcessTrusted()
         axItem.title = trusted ? "Window checks: on" : "Allow window checks…"
         axItem.isEnabled = !trusted
