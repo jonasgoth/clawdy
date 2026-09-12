@@ -14,11 +14,13 @@ final class TranscriptReader {
     private(set) var title: String?
     private(set) var lastEventTime: Double = 0
     private(set) var errored = false              // api_error not yet superseded by a new turn
-    private(set) var endedWithQuestion = false    // idle turn that ends by asking you something
+    private(set) var endedWithQuestion = false    // a question tool is parked, waiting on you
     private(set) var lastToolName = ""
+    private(set) var lastToolLabel = ""            // the same tool in its own spelling ("Bash")
     private(set) var toolUnanswered = false        // a tool_use with no matching tool_result yet
     private(set) var lastToolUseTime: Double = 0
     private(set) var permissionModeIsAuto = false  // "auto"/"bypassPermissions"/"acceptEdits"
+    private(set) var turnStartedAt: Double = 0     // epoch seconds of the prompt that began the current turn
 
     /// Directory holding this session's sub-agent transcripts, once the main file is located.
     var subagentsDirectory: String? {
@@ -78,7 +80,11 @@ final class TranscriptReader {
         case "ai-title":
             if let t = obj["aiTitle"] as? String, !t.isEmpty, title == nil { title = t }
         case "user":
-            // A new prompt or a returned tool result: Claude has more to do.
+            // A new prompt or a returned tool result: Claude has more to do. Only a prompt that
+            // follows a finished turn starts a new one (Desktop slips other user records in mid-turn).
+            if !isToolResult(obj), idle || turnStartedAt == 0 {
+                turnStartedAt = recordTime > 0 ? recordTime : lastEventTime
+            }
             idle = false
             idleSince = 0
             errored = false
@@ -94,9 +100,12 @@ final class TranscriptReader {
             if let tool = content.last(where: { $0["type"] as? String == "tool_use" }),
                let name = tool["name"] as? String {
                 lastToolName = name.lowercased()
+                lastToolLabel = name
                 toolUnanswered = true
                 lastToolUseTime = lastEventTime
-                if name == "AskUserQuestion" { endedWithQuestion = true }
+                // Desktop's own sidebar calls a chat "awaiting input" for exactly three things:
+                // AskUserQuestion, ExitPlanMode, and a pending tool permission. Match that, and only that.
+                if name == "AskUserQuestion" || name == "ExitPlanMode" { endedWithQuestion = true }
             }
 
             if stop == "tool_use" {
@@ -109,9 +118,6 @@ final class TranscriptReader {
                 if realEnd {
                     idle = true
                     idleSince = recordTime > 0 ? recordTime : lastEventTime
-                    if blockTypes.contains("text") {
-                        endedWithQuestion = endedWithQuestion || Self.lastTextIsQuestion(content)
-                    }
                 }
             }
         case "system":
@@ -134,11 +140,6 @@ final class TranscriptReader {
             return content.contains { $0["type"] as? String == "tool_result" }
         }
         return false
-    }
-
-    private static func lastTextIsQuestion(_ content: [[String: Any]]) -> Bool {
-        guard let text = content.last(where: { $0["type"] as? String == "text" })?["text"] as? String else { return false }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
     }
 
     private static let formatter: ISO8601DateFormatter = {

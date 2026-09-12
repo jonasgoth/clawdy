@@ -1,14 +1,12 @@
 {
   "cell": 240,
-  "cols": 8,
-  "rows": 4,
-  "fps": 8.0,
+  "cols": 12,
+  "rows": 10,
+  "fps": 30.0,
   "workingVariants": [
     "working:working-thinking",
     "working:working-juggling",
     "working:working-debugger",
-    "working:working-building",
-    "working:working-beacon",
     "working:working-tool-calling",
     "working:dj",
     "working:working-firefighting",
@@ -18,87 +16,77 @@
     "moving": {
       "file": "moving.png",
       "pet": "crab-walking",
-      "frames": 32
+      "frames": 120
     },
     "needsPermission": {
       "file": "needsPermission.png",
       "pet": "praying",
-      "frames": 32
+      "frames": 120
     },
     "needsQuestion": {
       "file": "needsQuestion.png",
       "pet": "confused",
-      "frames": 32
+      "frames": 120
     },
     "doneUnseen": {
       "file": "doneUnseen.png",
-      "pet": "celebrating",
-      "frames": 32
+      "pet": "200",
+      "frames": 120
     },
     "doneSeen": {
       "file": "doneSeen.png",
       "pet": "idle-living",
-      "frames": 32
+      "frames": 120
     },
     "dormant": {
       "file": "dormant.png",
       "pet": "sleeping",
-      "frames": 32
+      "frames": 120
     },
     "error": {
       "file": "error.png",
       "pet": "dizzy",
-      "frames": 32
+      "frames": 120
     },
     "leaving": {
       "file": "leaving.png",
       "pet": "going-away",
-      "frames": 32
+      "frames": 120
     },
     "working:working-thinking": {
       "file": "working-working-thinking.png",
       "pet": "working-thinking",
-      "frames": 32
+      "frames": 120
     },
     "working:working-juggling": {
       "file": "working-working-juggling.png",
       "pet": "working-juggling",
-      "frames": 32
+      "frames": 120
     },
     "working:working-debugger": {
       "file": "working-working-debugger.png",
       "pet": "working-debugger",
-      "frames": 32
-    },
-    "working:working-building": {
-      "file": "working-working-building.png",
-      "pet": "working-building",
-      "frames": 32
-    },
-    "working:working-beacon": {
-      "file": "working-working-beacon.png",
-      "pet": "working-beacon",
-      "frames": 32
+      "frames": 120
     },
     "working:working-tool-calling": {
       "file": "working-working-tool-calling.png",
       "pet": "working-tool-calling",
-      "frames": 32
+      "frames": 120
     },
     "working:dj": {
       "file": "working-dj.png",
       "pet": "dj",
-      "frames": 32
+      "frames": 120
     },
     "working:working-firefighting": {
       "file": "working-working-firefighting.png",
       "pet": "working-firefighting",
-      "frames": 32
+      "frames": 120
     },
     "working:magic": {
       "file": "working-magic.png",
       "pet": "magic",
-      "frames": 32
+      "frames": 120
     }
   }
 }

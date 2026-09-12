@@ -20,7 +20,7 @@ STATES = {
     "moving": "crab-walking",
     "needsPermission": "praying",
     "needsQuestion": "confused",
-    "doneUnseen": "celebrating",
+    "doneUnseen": "200",
     "doneSeen": "idle-living",
     "dormant": "sleeping",
     "error": "dizzy",
@@ -33,8 +33,6 @@ WORKING_PETS = [
     "working-thinking",
     "working-juggling",
     "working-debugger",
-    "working-building",
-    "working-beacon",
     "working-tool-calling",
     "dj",
     "working-firefighting",
@@ -43,7 +41,7 @@ WORKING_PETS = [
 for _p in WORKING_PETS:
     STATES[f"working:{_p}"] = _p
 CELL = 240          # px per frame (rendered 2x; shown at 120 pt)
-COLS, ROWS = 8, 4   # 32 frames
+COLS, ROWS = 12, 10 # 120 frames -> 30 fps, which divides evenly into a 60 Hz display
 LOOP_MS = 4000      # animation loop we sample
 FPS = COLS * ROWS / (LOOP_MS / 1000)
 

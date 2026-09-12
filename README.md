@@ -30,6 +30,7 @@ A few more details:
 - The "done" state clears only when you actually look at the chat. Clicking the pet never clears it.
 - A pet leaves after 5 minutes idle, unless it still needs you.
 - Drag pets around. Clicks anywhere else pass through to your apps.
+- Hover a pet for a speech bubble: what it is doing, for how long, and which project it is in.
 - The menu bar icon shows how many pets are alive and turns red when one needs you.
 
 Nothing leaves your Mac. Clawdy only reads files Claude already writes.

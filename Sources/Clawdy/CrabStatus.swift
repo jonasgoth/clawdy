@@ -20,6 +20,11 @@ enum CrabStatus: Equatable {
 
     /// True for the states the "seen" rule can clear.
     var isUnseenFinish: Bool { self == .doneUnseen || self == .needsQuestion || self == .error }
+
+    /// Which side of the floor the crab lives on. Left is the working side: Claude is busy, or is
+    /// paused mid-task waiting for a permission. Right is the done side: the turn has ended
+    /// (finished, asked a question, hit an error, or went dormant).
+    var isWorkingSide: Bool { self == .working || self == .usingTool || self == .needsPermission }
 }
 
 /// How to draw the badge for a status: SF Symbol name + circle color. Nil = no badge.

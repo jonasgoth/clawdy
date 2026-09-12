@@ -6,16 +6,18 @@ import AppKit
 /// hands the scene a snapshot on the main thread. All file I/O stays off the main thread so the
 /// crabs never stutter.
 final class SessionStore {
-    struct CrabSnapshot { let id: String; let title: String; let color: NSColor; let status: CrabStatus }
+    struct CrabSnapshot { let id: String; let title: String; let color: NSColor; let status: CrabStatus; var detail = CrabDetail() }
     struct BabySnapshot { let id: String; let parentId: String; let color: NSColor }
     struct Snapshot { var crabs: [CrabSnapshot] = []; var babies: [BabySnapshot] = [] }
     struct Row { let title: String; let status: CrabStatus }
 
     static let dormantAfter: TimeInterval = 600      // 10 minutes with no activity
     static let hideAfterIdle: TimeInterval = 300     // idle this long → the pet leaves (menu still lists it)
+    static let sleepAfterSeen: TimeInterval = 60     // a crab you have looked at rests this long, then sleeps
     static let permissionGuessDelay: TimeInterval = 6
     static let bashPermissionDelay: TimeInterval = 600
     static let lookDuration: TimeInterval = 1.5      // how long the chat must be in front to count as seen
+    static let storageMargin: TimeInterval = 2       // Desktop's record must postdate a finish by this much to speak for it
     static let coworkFallbackLook: TimeInterval = 3  // without Accessibility we can't tell which Cowork chat is up
 
     private weak var scene: PlaypenScene?
@@ -27,14 +29,17 @@ final class SessionStore {
     private var readers: [String: TranscriptReader] = [:]
     private let desktopMeta = DesktopMetaIndex()
     private let cowork = CoworkWatcher()
+    private let desktopStorage = DesktopLocalStorage()
     private var ttyByPid: [Int: String?] = [:]
-    private let watcher = FileWatcher(roots: [DesktopMetaIndex.baseDir, CoworkWatcher.baseDir])
+    private let watcher = FileWatcher(roots: [DesktopMetaIndex.baseDir, CoworkWatcher.baseDir, DesktopLocalStorage.baseDir])
     private var coworkCache: [CoworkWatcher.Session] = []
     private var lastDesktopScan: Double = 0
     private var lastCoworkScan: Double = 0
+    private var lastStorageScan: Double = 0
     static let fallbackRescan: TimeInterval = 30
+    static let storageRescan: TimeInterval = 2       // FSEvents stays quiet for appends to Desktop's storage log, so poll it (a few stats)
     private var seenDoneAt: [String: Double] = [:]   // session id → the finish time that has been seen
-    private var colorSlots: [String: Int] = [:]      // session id → palette index, unique while it lives
+    private var seenAt: [String: Double] = [:]       // session id → when you first saw that finish
 
     /// Main-thread copy for the menu.
     private(set) var rows: [Row] = []
@@ -43,9 +48,12 @@ final class SessionStore {
 
     private static let debug = ProcessInfo.processInfo.environment["CLAWDY_DEBUG"] == "1"
     private var lastLogged: [String: CrabStatus] = [:]
+    private var lastSeenCheckLog: [String: Double] = [:]   // debug: last time an unseen crab's inputs were logged
+    private static let stampFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f }()
     private func log(_ message: String) {
         guard Self.debug else { return }
-        FileHandle.standardError.write(("[clawdy] " + message + "\n").data(using: .utf8)!)
+        let stamp = Self.stampFormatter.string(from: Date())
+        FileHandle.standardError.write(("[clawdy] " + stamp + " " + message + "\n").data(using: .utf8)!)
     }
 
     init(scene: PlaypenScene, seen: SeenDetector) {
@@ -77,12 +85,19 @@ final class SessionStore {
         let live = SessionRegistry.scan()
         // Folder trees are only rescanned when FSEvents saw a change (plus a slow safety rescan).
         if watcher.consume(DesktopMetaIndex.baseDir) || now - lastDesktopScan > Self.fallbackRescan {
+            if Self.debug, now - lastDesktopScan <= Self.fallbackRescan { log("fs: meta folder changed") }
             desktopMeta.refresh(now: now)
             lastDesktopScan = now
         }
         if watcher.consume(CoworkWatcher.baseDir) || now - lastCoworkScan > Self.fallbackRescan {
             coworkCache = cowork.scan(now: now)
             lastCoworkScan = now
+        }
+        if watcher.consume(DesktopLocalStorage.baseDir) || now - lastStorageScan > Self.storageRescan {
+            let before = desktopStorage.state?.writtenAt
+            desktopStorage.refresh()
+            if Self.debug, let w = desktopStorage.state?.writtenAt, w != before { log("storage record now from \(Self.stampFormatter.string(from: Date(timeIntervalSince1970: w)))") }
+            lastStorageScan = now
         }
         let coworkSessions = coworkCache
 
@@ -102,14 +117,32 @@ final class SessionStore {
             reader.refresh()
             var status = resolve(reader: reader, hook: hooks[session.sessionId], now: now)
 
-            if status == .doneUnseen {
-                let doneAt = reader.idleSince > 0 ? reader.idleSince : reader.lastEventTime
-                let seenNow = seenDoneAt[session.sessionId] == doneAt
+            if status.isUnseenFinish {
+                // When it stopped needing to run: the end of the turn, or the question tool it is
+                // parked on. (Not lastEventTime: Desktop keeps appending bookkeeping records with
+                // fresh timestamps, which would move the target and un-see the crab.)
+                let doneAt = reader.idleSince > 0 ? reader.idleSince
+                    : (reader.toolUnanswered ? reader.lastToolUseTime : reader.lastEventTime)
+                let seenNow: Bool
+                switch desktopVerdict(meta: meta, doneAt: doneAt, look: look, now: now) {
+                case .seen:   seenNow = true                      // Desktop's own unread dot decides…
+                case .unseen: seenNow = false; seenDoneAt[session.sessionId] = nil   // …and overrules an earlier guess
+                case .notYet: seenNow = seenDoneAt[session.sessionId] == doneAt      // no dot, but you have not looked yet
+                case nil:     seenNow = seenDoneAt[session.sessionId] == doneAt      // Desktop's record is too old to say
                     || isSeen(session: session, doneAt: doneAt, meta: meta, look: look, now: now)
-                if Self.debug, lastLogged[session.sessionId] != (seenNow ? .doneSeen : .doneUnseen) {
+                }
+                let stuckUnseen = Self.debug && !seenNow && now - (lastSeenCheckLog[session.sessionId] ?? 0) > 5
+                if Self.debug, stuckUnseen || (lastLogged[session.sessionId] != (seenNow ? .doneSeen : status)
+                   && !(seenNow && lastLogged[session.sessionId] == .dormant)) {
+                    lastSeenCheckLog[session.sessionId] = now
                     let lf = meta.map { Int($0.lastFocusedAt - doneAt) } ?? -999999
                     let cf = look.claudeFrontSince.map { Int(now - $0) } ?? -1
-                    log("seen-check \(session.sessionId.prefix(8)): front=\(look.frontBundleId ?? "nil") claudeFrontFor=\(cf)s focusedChat=\(desktopMeta.mostRecentlyFocusedId?.prefix(8) ?? "nil") lastFocused-doneAt=\(lf)s canSee=\(look.canSee) -> \(seenNow ? "SEEN" : "unseen")")
+                    let ls = desktopStorage.state
+                    let unread = meta.map { ls?.unreadIds.contains($0.localId) ?? false } ?? false
+                    let onScreen = meta.map { ls?.currentSessionId == $0.localId } ?? false
+                    let lsAge = ls.map { Int($0.writtenAt - doneAt) } ?? -999999
+                    let verdict = desktopVerdict(meta: meta, doneAt: doneAt, look: look, now: now).map { "\($0)" } ?? "nil"
+                    log("seen-check \(session.sessionId.prefix(8)): verdict=\(verdict) doneAt=\(Self.stampFormatter.string(from: Date(timeIntervalSince1970: doneAt))) lastFocusedAt=\(meta.map { Self.stampFormatter.string(from: Date(timeIntervalSince1970: $0.lastFocusedAt)) } ?? "nil") front=\(look.frontBundleId ?? "nil") claudeFrontFor=\(cf)s focusedChat=\(desktopMeta.mostRecentlyFocusedId?.prefix(8) ?? "nil") lastFocused-doneAt=\(lf)s desktopUnread=\(unread) desktopOnScreen=\(onScreen) storageWritten-doneAt=\(lsAge)s canSee=\(look.canSee) -> \(seenNow ? "SEEN" : "unseen")")
                 }
                 if seenNow {
                     seenDoneAt[session.sessionId] = doneAt
@@ -118,15 +151,18 @@ final class SessionStore {
             } else if status.isBusy {
                 seenDoneAt[session.sessionId] = nil           // new turn → next finish is unseen again
             }
+            status = restOrSleep(id: session.sessionId, status: status, now: now)
 
             let title = meta?.title ?? reader.title ?? session.name
-            let color = ownColor(for: session.sessionId, liveIds: Set(live.map { $0.sessionId }))
+            let color = CrabPalette.standard
             let idleFor = status.isBusy ? 0 : now - (reader.lastEventTime == 0 ? now : reader.lastEventTime)
             if !status.isBusy, !status.needsYou, idleFor > Self.hideAfterIdle {
                 newRows.append(Row(title: title, status: .dormant))   // listed, but the pet has left
+                if Self.debug { lastLogged[session.sessionId] = status }   // keeps the seen-check log quiet
                 continue
             }
-            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: title, color: color, status: status))
+            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: title, color: color, status: status,
+                                               detail: detail(for: session, reader: reader, status: status)))
             newRows.append(Row(title: title, status: status))
 
             if status.isBusy, let dir = reader.subagentsDirectory {
@@ -139,7 +175,7 @@ final class SessionStore {
         for session in coworkSessions {
             liveIds.insert(session.sessionId)
             var status = session.status
-            if status == .doneUnseen {
+            if status.isUnseenFinish {
                 let doneAt = session.lastActivity
                 if seenDoneAt[session.sessionId] == doneAt
                     || isCoworkSeen(title: session.title, doneAt: doneAt, look: look, now: now) {
@@ -149,15 +185,17 @@ final class SessionStore {
             } else if status.isBusy {
                 seenDoneAt[session.sessionId] = nil
             }
+            status = restOrSleep(id: session.sessionId, status: status, now: now)
             if !status.isBusy, !status.needsYou, now - session.lastActivity > Self.hideAfterIdle {
                 newRows.append(Row(title: session.title, status: .dormant))
                 continue
             }
-            let color = ownColor(for: session.sessionId, liveIds: liveIds)
-            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: session.title, color: color, status: status))
+            let color = CrabPalette.standard
+            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: session.title, color: color, status: status,
+                                               detail: CrabDetail(project: session.projectName, source: "Cowork",
+                                                                  since: session.lastActivity)))
             newRows.append(Row(title: session.title, status: status))
         }
-        for id in Set(colorSlots.keys).subtracting(liveIds) { colorSlots[id] = nil }
 
         if Self.debug {
             for c in snapshot.crabs where lastLogged[c.id] != c.status {
@@ -168,6 +206,7 @@ final class SessionStore {
         }
         for id in Set(readers.keys).subtracting(liveIds) { readers[id] = nil }
         for id in Set(seenDoneAt.keys).subtracting(liveIds) { seenDoneAt[id] = nil }
+        for id in Set(seenAt.keys).subtracting(liveIds) { seenAt[id] = nil }
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -177,14 +216,25 @@ final class SessionStore {
         }
     }
 
-    /// Every live crab gets its own palette color: the least-used one when it first appears.
-    private func ownColor(for id: String, liveIds: Set<String>) -> NSColor {
-        if let slot = colorSlots[id] { return CrabPalette.colors[slot] }
-        var usage = [Int](repeating: 0, count: CrabPalette.colors.count)
-        for (other, slot) in colorSlots where liveIds.contains(other) { usage[slot] += 1 }
-        let slot = usage.indices.min(by: { usage[$0] != usage[$1] ? usage[$0] < usage[$1] : $0 < $1 }) ?? 0
-        colorSlots[id] = slot
-        return CrabPalette.colors[slot]
+    /// What the hover bubble says: the project, where it runs, the tool in hand, and when the
+    /// current state began (the turn started, the tool asked for approval, or the turn ended).
+    private func detail(for session: LiveSession, reader: TranscriptReader, status: CrabStatus) -> CrabDetail {
+        var d = CrabDetail()
+        d.project = session.projectName
+        d.source = session.entrypoint == "cli" ? "Terminal" : "Claude app"
+        d.autoMode = reader.permissionModeIsAuto
+        if reader.toolUnanswered || status == .usingTool, !reader.lastToolLabel.isEmpty {
+            d.tool = CrabDetail.toolLabel(reader.lastToolLabel)
+        }
+        let doneAt = reader.idleSince > 0 ? reader.idleSince : reader.lastEventTime
+        switch status {
+        case .working, .usingTool:           d.since = reader.turnStartedAt
+        case .needsPermission:               d.since = reader.lastToolUseTime
+        case .needsQuestion:                 d.since = reader.toolUnanswered ? reader.lastToolUseTime : doneAt
+        case .doneUnseen, .doneSeen, .error: d.since = doneAt
+        case .dormant:                       d.since = reader.lastEventTime
+        }
+        return d
     }
 
     private func reader(for id: String) -> TranscriptReader {
@@ -199,13 +249,14 @@ final class SessionStore {
     /// Turn transcript + hook signals into one status, using the plan's priority order.
     private func resolve(reader: TranscriptReader, hook: HookBridge.Event?, now: Double) -> CrabStatus {
         // Hooks are ground truth when present and at least as fresh as the transcript.
-        if let hook, hook.ts + 1 >= reader.lastEventTime {
-            switch hook.state {
-            case "permission": return .needsPermission
-            case "tool": return .usingTool
-            default: break
-            }
-        }
+        let hookState = hook.flatMap { $0.ts + 1 >= reader.lastEventTime ? $0.state : nil }
+        if hookState == "permission" { return .needsPermission }
+
+        // A question tool (AskUserQuestion, ExitPlanMode) is parked waiting for you, not running.
+        // The hook only says "tool" for it, so this has to come before the hook's tool state.
+        if reader.toolUnanswered, Self.questionTools.contains(reader.lastToolName) { return .needsQuestion }
+
+        if hookState == "tool" { return .usingTool }
 
         let age = now - (reader.lastEventTime == 0 ? now : reader.lastEventTime)
 
@@ -229,7 +280,18 @@ final class SessionStore {
     }
 
     private static let readOnlyTools: Set<String> = ["read", "glob", "grep", "todowrite", "webfetch", "websearch"]
+    /// Tools that block on you answering something (lowercased, like `lastToolName`).
+    private static let questionTools: Set<String> = ["askuserquestion", "exitplanmode"]
     private func isReadOnly(_ tool: String) -> Bool { Self.readOnlyTools.contains(tool) }
+
+    /// A crab you have looked at rests for a while, then falls asleep. Anything else (a new turn,
+    /// a fresh unseen finish, Desktop putting the dot back) resets the timer.
+    private func restOrSleep(id: String, status: CrabStatus, now: Double) -> CrabStatus {
+        guard status == .doneSeen else { seenAt[id] = nil; return status }
+        let since = seenAt[id] ?? now
+        seenAt[id] = since
+        return now - since >= Self.sleepAfterSeen ? .dormant : status
+    }
 
     // MARK: - The "seen" rule
 
@@ -247,14 +309,67 @@ final class SessionStore {
             return max(since, doneAt) + Self.lookDuration <= now
         }
 
-        // Desktop Code tab.
-        // 1. You clicked into the chat after it finished (Desktop writes lastFocusedAt).
-        if let meta, meta.lastFocusedAt >= doneAt - 0.5 { return true }
-        // 2. It was already the open chat, and the Claude app has been in front long enough after
-        //    the finish for you to have seen it.
-        guard let since = look.claudeFrontSince,
-              desktopMeta.mostRecentlyFocusedId == session.sessionId else { return false }
+        // Desktop Code tab, before Desktop's own record has caught up with this finish.
+        // 1. You opened the chat after it finished (Desktop writes lastFocusedAt within a second),
+        //    and the Claude app is in front (a bump while it sits behind a browser is not a read).
+        if let meta, meta.lastFocusedAt >= doneAt - 0.5, look.claudeFrontSince != nil { return true }
+        // 2. It is the chat on screen, and Claude has been in front long enough since the finish.
+        guard let meta, onScreenLocalId() == meta.localId, let since = look.claudeFrontSince else { return false }
         return max(since, doneAt) + Self.lookDuration <= now
+    }
+
+    /// The chat on screen, as best we can tell. Desktop's own "current chat" record is exact but
+    /// reaches disk up to a minute late (its web storage is flushed on a timer). A click into any
+    /// chat after that record was written (`lastFocusedAt`, which lands within a second) is invisible
+    /// to it, so then the newest click is the better answer. Nil means a non-chat view (new chat…).
+    private func onScreenLocalId() -> String? {
+        let newestClick = desktopMeta.mostRecentlyFocusedId.flatMap { desktopMeta.meta(for: $0) }
+        if let ls = desktopStorage.state, ls.writtenAt > newestClickAt() + Self.storageMargin {
+            return ls.currentSessionId
+        }
+        return newestClick?.localId
+    }
+
+    enum DesktopVerdict { case seen, unseen, notYet }
+
+    /// What Desktop's own records say about this finish. Two records, two speeds: `lastFocusedAt`
+    /// (per-chat meta file) lands within a second of you opening a chat; the unread dot and the
+    /// chat-on-screen record (web storage) land up to a minute later. A record can only vouch for
+    /// what happened before it was written, so a click newer than the storage record wins over it,
+    /// and a storage record newer than the click wins over that (it catches `lastFocusedAt` bumps
+    /// that were not real reads). Nil: nothing on disk postdates the finish, so the caller guesses.
+    /// `.notYet`: the chat was on screen when it finished, but you have not had the app in front
+    /// long enough since with it still up.
+    private func desktopVerdict(meta: DesktopMetaIndex.Meta?, doneAt: Double,
+                                look: SeenDetector.Snapshot, now: Double) -> DesktopVerdict? {
+        guard let meta, let ls = desktopStorage.state, doneAt > 0 else { return nil }
+        let openedAfterFinish = meta.lastFocusedAt >= doneAt - 0.5
+        let recordAfterClick = ls.writtenAt > meta.lastFocusedAt + Self.storageMargin
+        let recordAfterFinish = ls.writtenAt > doneAt + Self.storageMargin
+        // Opening the chat counts once the Claude app is actually in front (a bump while it sits
+        // behind a browser is not a read); the store checks again every second, so this is instant.
+        let claudeUp = look.canSee && look.claudeFrontSince != nil
+        if ls.unreadIds.contains(meta.localId) || ls.explicitUnreadIds.contains(meta.localId) {
+            // Desktop drops the dot the moment you open the chat, but that reaches disk with its
+            // next flush. Until then a newer click is the truth; otherwise the dot is.
+            guard openedAfterFinish, !recordAfterClick else { return .unseen }
+            return claudeUp ? .seen : .notYet
+        }
+        if openedAfterFinish { return claudeUp ? .seen : .notYet }   // opened after the finish, nothing newer disagrees
+        guard recordAfterFinish else { return nil }
+        // Desktop saw no dot after the finish: the chat was on screen when it finished. That counts
+        // once the app has been in front long enough with it still up, or once you have clicked on
+        // to another chat since (which you did from the app, with this one in view).
+        guard look.canSee else { return .notYet }
+        if newestClickAt() > doneAt + 0.5 { return .seen }
+        guard onScreenLocalId() == meta.localId, let since = look.claudeFrontSince,
+              max(since, doneAt) + Self.lookDuration <= now else { return .notYet }
+        return .seen
+    }
+
+    /// When you last clicked into any chat (the newest `lastFocusedAt` on disk).
+    private func newestClickAt() -> Double {
+        desktopMeta.mostRecentlyFocusedId.flatMap { desktopMeta.meta(for: $0) }?.lastFocusedAt ?? 0
     }
 
     private func isCoworkSeen(title: String, doneAt: Double, look: SeenDetector.Snapshot, now: Double) -> Bool {

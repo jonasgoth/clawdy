@@ -9,6 +9,7 @@ import Foundation
 final class DesktopMetaIndex {
     struct Meta {
         let cliSessionId: String
+        let localId: String            // Desktop's own id ("local_…"), used by its unread list
         let title: String?
         let lastFocusedAt: Double      // epoch seconds (file stores ms)
         let lastActivityAt: Double
@@ -55,11 +56,13 @@ final class DesktopMetaIndex {
         guard let data = FileManager.default.contents(atPath: path),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let cli = obj["cliSessionId"] as? String else { return nil }
+        let localId = (obj["sessionId"] as? String) ?? (path as NSString).lastPathComponent.replacingOccurrences(of: ".json", with: "")
         func seconds(_ key: String) -> Double {
             let v = (obj[key] as? Double) ?? (obj[key] as? Int).map(Double.init) ?? 0
             return v > 1e11 ? v / 1000 : v      // ms → s
         }
         return Meta(cliSessionId: cli,
+                    localId: localId,
                     title: (obj["title"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                     lastFocusedAt: seconds("lastFocusedAt"),
                     lastActivityAt: seconds("lastActivityAt"),

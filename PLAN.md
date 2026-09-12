@@ -90,9 +90,15 @@ Priority when signals disagree: permission > question > error > done-not-seen > 
 A done-badge never clears from touching the crab. Only from you actually looking at the chat.
 
 **Desktop Code session**
-Seen if either:
-1. `lastFocusedAt` is later than the time it finished (you clicked into it), or
-2. it was already the focused chat when it finished, and the Claude app is the front app for 1.5 s after that.
+The Desktop app keeps its own "unread" dot per chat (the sidebar's blue dot) in its web storage,
+and that is the truth. It lands on disk late (usually seconds, up to ~2 min), so:
+- Once Desktop's record on disk is newer than the finish, it decides: you marked it unread on
+  purpose → unseen; you clicked into it after it finished (`lastFocusedAt`) → seen; the dot is on →
+  unseen; no dot → seen once the Claude app has been the front app for 1.5 s after the finish.
+- Until then, guess: seen if `lastFocusedAt` is later than the finish, or if it was the most
+  recently focused chat and Claude is front for 1.5 s. `lastFocusedAt` is never written for an
+  empty new chat, so Desktop's "chat on screen" record vetoes the guess when it is fresher than
+  the last click. A wrong guess gets corrected when Desktop's record arrives.
 Front app comes from `NSWorkspace`. No permission needed.
 
 **Cowork session**

@@ -4,13 +4,19 @@ import SpriteKit
 /// The 2D floor the crabs stand on. Owns the crabs (and sub-agent baby crabs), handles dragging,
 /// runs the little wander brain, and lets the SessionStore add / update / remove crabs.
 final class PlaypenScene: SKScene {
-    static let floorInset: CGFloat = 1
+    static let floorInset: CGFloat = 0
     /// How far from the herd's center a crab will roam (grows a little with the herd).
     static let baseHerdSpread: CGFloat = 160
     /// How fast a relaxed crab ambles during its occasional shuffle.
     static let strollSpeed: CGFloat = 22
+    /// Average speed of a crab switching sides (started working, or finished). The run is eased,
+    /// so it winds up, sprints at about 1.5x this in the middle, and glides to a stop.
+    static let dashSpeed: CGFloat = 700
     /// Minimum breathing room between crabs.
     static let spacing: CGFloat = 96
+
+    /// A crab only steps aside for a neighbour this often, so crowding never turns into shoving.
+    static let unstackCooldown: TimeInterval = 30
     /// After you drop a crab it stays put this long before rejoining the herd.
     static let holdAfterDrag: TimeInterval = 45
 
@@ -23,6 +29,12 @@ final class PlaypenScene: SKScene {
     private var dragged: CrabNode?
     private var dragOffset = CGPoint.zero
     private var lastDragX: CGFloat = 0
+
+    /// The crab under the cursor, and where the cursor was (scene coordinates) when we last heard.
+    private var hovered: CrabNode?
+    private var hoverPoint = CGPoint(x: -1000, y: -1000)
+    /// The cursor must rest on a crab this long before its bubble pops (no flashing while crossing).
+    static let hoverDelay: TimeInterval = 0.25
 
     private var sceneTime: TimeInterval = 0
     private var lastUpdate: TimeInterval = 0
@@ -63,7 +75,25 @@ final class PlaypenScene: SKScene {
         x < r.lowerBound ? r.lowerBound - x : (x > r.upperBound ? x - r.upperBound : 0)
     }
 
-    private func crabs(in r: ClosedRange<CGFloat>) -> [CrabNode] { crabs.filter { r.contains($0.position.x) } }
+    /// The two sides of the floor. Left is the working side, right is the done side. With the Dock
+    /// in our row that is simply the left gap and the right gap; otherwise the floor is split in half.
+    private var sides: (working: ClosedRange<CGFloat>, done: ClosedRange<CGFloat>) {
+        let ranges = allowedRanges
+        if ranges.count >= 2 { return (ranges[0], ranges[ranges.count - 1]) }
+        let r = ranges[0]
+        let mid = (r.lowerBound + r.upperBound) / 2
+        let aisle = min(30, (r.upperBound - r.lowerBound) / 4)   // a little no-man's-land in the middle
+        return (r.lowerBound...(mid - aisle), (mid + aisle)...r.upperBound)
+    }
+
+    private func side(for status: CrabStatus) -> ClosedRange<CGFloat> {
+        status.isWorkingSide ? sides.working : sides.done
+    }
+
+    /// Where a crab will be standing once it stops: its dash or stroll target, else where it is.
+    private func restingX(of crab: CrabNode) -> CGFloat {
+        crab.dashTarget ?? crab.wanderTarget ?? crab.position.x
+    }
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -83,6 +113,8 @@ final class PlaypenScene: SKScene {
         for c in snapshot.crabs { syncCrab(id: c.id, title: c.title, color: c.color, status: c.status) }
         for b in snapshot.babies { syncBaby(id: b.id, parentId: b.parentId, color: b.color) }
         pruneBabies(keeping: Set(snapshot.babies.map { $0.id }))
+        for c in snapshot.crabs { byId[c.id]?.detail = c.detail }
+        for crab in crabs { crab.helpers = babyParent.values.filter { $0 == crab.id }.count }
     }
 
     func syncCrab(id: String, title: String, color: NSColor, status: CrabStatus) {
@@ -93,6 +125,8 @@ final class PlaypenScene: SKScene {
             if dragged !== crab, old != status {
                 crab.setStatus(status)
                 boostUntil = sceneTime + 2
+                // Switching sides beats a hand placement: the crab runs over right away.
+                if old.isWorkingSide != status.isWorkingSide { crab.holdUntil = 0 }
                 if status == .doneUnseen, old.isBusy { SoundPlayer.play(.done) }
                 if status.needsYou, !old.needsYou { SoundPlayer.play(.attention) }
             }
@@ -101,7 +135,7 @@ final class PlaypenScene: SKScene {
         let crab = CrabNode(id: id)
         crab.title = title
         crab.projectColor = color
-        crab.position = CGPoint(x: spawnX(), y: floorY)
+        crab.position = CGPoint(x: landingX(in: side(for: status), for: nil), y: floorY)
         crab.setStatus(status)
         crab.nextWanderAt = sceneTime + 3
         addChild(crab)
@@ -119,6 +153,7 @@ final class PlaypenScene: SKScene {
         byId[id] = nil
         crabs.removeAll { $0 === crab }
         if dragged === crab { dragged = nil }
+        if hovered === crab { setHovered(nil, at: nil) }
         for (babyId, parent) in babyParent where parent == id { removeBaby(id: babyId) }
         walkOff(crab, id: id)
     }
@@ -162,21 +197,68 @@ final class PlaypenScene: SKScene {
         lastUpdate = currentTime
         sceneTime = currentTime
 
+        keepSides()
         wander(dt: dt)
-        unstack(dt: dt)
+        unstack()
         followParents()
         layoutTags()
+        hoverCheck()
         adaptFrameRate()
+    }
+
+    /// Left is the working side, right is the done side. Anyone standing on the wrong side runs
+    /// over (a crab you just placed by hand waits out its hold first). A crab whose status flips
+    /// mid-run turns around.
+    private func keepSides() {
+        let slack: CGFloat = 24
+        for crab in crabs where crab !== dragged && sceneTime >= crab.holdUntil {
+            let home = side(for: crab.currentStatus)
+            if let target = crab.dashTarget {
+                if !home.contains(target) { dash(crab, to: landingX(in: home, for: crab)) }
+                continue
+            }
+            guard !(home.lowerBound - slack...home.upperBound + slack).contains(crab.position.x) else { continue }
+            dash(crab, to: landingX(in: home, for: crab))
+        }
+    }
+
+    private func dash(_ crab: CrabNode, to x: CGFloat) {
+        crab.startDash(to: x, duration: TimeInterval(abs(x - crab.position.x) / Self.dashSpeed))
+        boostUntil = sceneTime + 2
+    }
+
+    /// Cubic ease-in-out: a quick wind-up, full sprint in the middle, and a soft stop.
+    private static func easeInOut(_ t: CGFloat) -> CGFloat {
+        t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
+    }
+
+    /// Slope of `easeInOut`, scaled to 0...1 (it peaks in the middle of the run). Paces the legs.
+    private static func easeInOutPace(_ t: CGFloat) -> CGFloat {
+        (t < 0.5 ? 12 * t * t : 12 * (1 - t) * (1 - t)) / 3
     }
 
     /// Only relaxed crabs roam, and barely: they stand and live their little life, and every now
     /// and then take one short shuffle. Working crabs stay put and just play their animation.
+    /// A crab switching sides runs, fast, and does nothing else until it gets there.
     private func wander(dt: TimeInterval) {
         for crab in crabs where crab !== dragged {
-            let home = range(containing: crab.position.x)
-            let mates = crabs(in: home)
+            if let target = crab.dashTarget {
+                crab.dashElapsed += dt
+                let t = CGFloat(min(crab.dashElapsed / crab.dashDuration, 1))
+                crab.position.x = crab.dashFromX + (target - crab.dashFromX) * Self.easeInOut(t)
+                crab.setDashPace(Self.easeInOutPace(t))
+                if t >= 1 {
+                    crab.position.x = target
+                    crab.finishDash()
+                    crab.nextWanderAt = sceneTime + .random(in: 12...30)
+                }
+                continue
+            }
+
+            let home = side(for: crab.currentStatus)
+            let mates = crabs.filter { $0 !== crab && home.contains(restingX(of: $0)) }
             let herdCenter = mates.isEmpty ? (home.lowerBound + home.upperBound) / 2
-                : mates.map { $0.position.x }.reduce(0, +) / CGFloat(mates.count)
+                : mates.map { restingX(of: $0) }.reduce(0, +) / CGFloat(mates.count)
 
             if let target = crab.wanderTarget {
                 let dx = target - crab.position.x
@@ -218,11 +300,12 @@ final class PlaypenScene: SKScene {
         }
     }
 
-    /// Two crabs standing on top of each other gently step apart. Crabs you placed by hand, and
+    /// Two crabs standing too close take one short step apart — a single shuffle, not a continuous
+    /// shove, and at most once every `unstackCooldown` seconds each. Crabs you placed by hand, and
     /// crabs that want your attention or are asleep, hold their ground; the other one moves.
-    private func unstack(dt: TimeInterval) {
+    private func unstack() {
         let minGap: CGFloat = 44
-        let free = crabs.filter { $0 !== dragged }.sorted { $0.position.x < $1.position.x }
+        let free = crabs.filter { $0 !== dragged && !$0.isDashing }.sorted { $0.position.x < $1.position.x }
         guard free.count > 1 else { return }
         func fixed(_ c: CrabNode) -> Bool {
             c.holdUntil > sceneTime || c.currentStatus.needsYou || c.currentStatus == .dormant
@@ -231,11 +314,26 @@ final class PlaypenScene: SKScene {
             let a = free[i - 1], b = free[i]
             let gap = b.position.x - a.position.x
             guard gap < minGap else { continue }
-            let push = min((minGap - gap) / 2, 40 * CGFloat(dt))
             let aFixed = fixed(a), bFixed = fixed(b)
-            if !aFixed { a.position.x = clampX(a.position.x - (bFixed ? push * 2 : push), for: a) }
-            if !bFixed { b.position.x = clampX(b.position.x + (aFixed ? push * 2 : push), for: b) }
+            let room = minGap - gap
+            if !aFixed { stepAside(a, by: -(bFixed ? room : room / 2)) }
+            if !bFixed { stepAside(b, by: aFixed ? room : room / 2) }
         }
+    }
+
+    /// One short walk `dx` points sideways, then a long cooldown before this crab budges again.
+    /// A crab already walking, or still held after a drag, is left alone.
+    private func stepAside(_ crab: CrabNode, by dx: CGFloat) {
+        guard crab.wanderTarget == nil, sceneTime >= crab.nextUnstackAt, sceneTime >= crab.holdUntil else { return }
+        crab.nextUnstackAt = sceneTime + Self.unstackCooldown
+        let home = side(for: crab.currentStatus)
+        let step = dx + (dx < 0 ? -8 : 8)   // a touch extra, so they end up clearly apart
+        let target = min(max(crab.position.x + step, home.lowerBound + crab.size.width / 2),
+                         home.upperBound - crab.size.width / 2)
+        guard abs(target - crab.position.x) > 2 else { return }
+        crab.wanderTarget = target
+        crab.facingRight = target > crab.position.x
+        crab.startMoving()
     }
 
     /// Nudge a target x away from any other crab standing too close to it.
@@ -274,12 +372,12 @@ final class PlaypenScene: SKScene {
         }
     }
 
-    /// 24 fps while anything is moving or wants attention; 10 fps when everyone is resting.
+    /// 30 fps (the pets' own frame rate) while any crab is awake; 15 fps once everyone is asleep.
     private func adaptFrameRate() {
         guard let view else { return }
-        let busy = isDragging || !leaving.isEmpty || !babies.isEmpty || sceneTime < boostUntil
-            || crabs.contains { $0.isMoving || $0.currentStatus.isBusy || $0.currentStatus.needsYou }
-        let fps = busy ? 24 : 10
+        let awake = isDragging || !leaving.isEmpty || !babies.isEmpty || sceneTime < boostUntil
+            || crabs.contains { $0.currentStatus != .dormant }
+        let fps = awake ? 30 : 15
         if view.preferredFramesPerSecond != fps { view.preferredFramesPerSecond = fps }
     }
 
@@ -300,22 +398,20 @@ final class PlaypenScene: SKScene {
         }
     }
 
-    /// New crabs arrive in the emptier wallpaper gap (the wider one on a tie), near its herd.
-    private func spawnX() -> CGFloat {
-        let ranges = allowedRanges
-        let home = ranges.min(by: { a, b in
-            let ca = crabs(in: a).count, cb = crabs(in: b).count
-            return ca != cb ? ca < cb : (a.upperBound - a.lowerBound) > (b.upperBound - b.lowerBound)
-        }) ?? ranges[0]
-        let mates = crabs(in: home)
+    /// A free spot on a side, near whoever is already there (or on their way there). New crabs
+    /// are born on one, and a crab switching sides runs to one.
+    private func landingX(in home: ClosedRange<CGFloat>, for crab: CrabNode?) -> CGFloat {
+        let others = crabs.filter { $0 !== crab }.map { restingX(of: $0) }
+        let mates = others.filter { home.contains($0) }
         let center = mates.isEmpty ? (home.lowerBound + home.upperBound) / 2
-            : mates.map { $0.position.x }.reduce(0, +) / CGFloat(mates.count)
+            : mates.reduce(0, +) / CGFloat(mates.count)
         var x = center + .random(in: -80...80)
         for _ in 0..<4 {
-            guard let neighbour = crabs.first(where: { abs($0.position.x - x) < Self.spacing }) else { break }
-            x = neighbour.position.x + (x >= neighbour.position.x ? Self.spacing : -Self.spacing)
+            guard let neighbour = others.first(where: { abs($0 - x) < Self.spacing }) else { break }
+            x = neighbour + (x >= neighbour ? Self.spacing : -Self.spacing)
         }
-        return min(max(x, home.lowerBound + 26), home.upperBound - 26)
+        let inset = min(26, (home.upperBound - home.lowerBound) / 2)
+        return min(max(x, home.lowerBound + inset), home.upperBound - inset)
     }
 
     /// Keep x inside the wallpaper gap it is in (or the nearest one).
@@ -332,19 +428,20 @@ final class PlaypenScene: SKScene {
                        y: min(max(p.y, floorY), size.height - crab.size.height))
     }
 
-    /// Spread everyone out evenly and forget any "stay here" holds.
+    /// Spread everyone out evenly on their own side and forget any "stay here" holds.
     func resetCrabs() {
-        let ranges = allowedRanges
-        // Deal crabs across the gaps, widest gap first, evenly spaced inside each.
-        let ordered = ranges.sorted { ($0.upperBound - $0.lowerBound) > ($1.upperBound - $1.lowerBound) }
-        var buckets: [[CrabNode]] = Array(repeating: [], count: ordered.count)
-        for (i, crab) in crabs.enumerated() { buckets[i % ordered.count].append(crab) }
-        for (r, bucket) in zip(ordered, buckets) {
+        let s = sides
+        let groups: [(ClosedRange<CGFloat>, [CrabNode])] = [
+            (s.working, crabs.filter { $0.currentStatus.isWorkingSide }),
+            (s.done, crabs.filter { !$0.currentStatus.isWorkingSide }),
+        ]
+        for (r, bucket) in groups {
             let inset: CGFloat = 40
             let lo = r.lowerBound + inset, hi = r.upperBound - inset
             let step = bucket.count > 1 ? (hi - lo) / CGFloat(bucket.count - 1) : 0
             for (i, crab) in bucket.enumerated() {
                 crab.removeAction(forKey: "settle")
+                crab.finishDash()
                 crab.wanderTarget = nil
                 crab.stopMoving()
                 crab.holdUntil = 0
@@ -352,6 +449,27 @@ final class PlaypenScene: SKScene {
                 crab.position = CGPoint(x: bucket.count == 1 ? (lo + hi) / 2 : lo + CGFloat(i) * step, y: floorY)
             }
         }
+    }
+
+    // MARK: - Hover
+
+    /// The crab the cursor is on (nil when it is not on one). Its bubble pops after a short rest.
+    func setHovered(_ crab: CrabNode?, at point: CGPoint?) {
+        hoverPoint = point ?? CGPoint(x: -1000, y: -1000)
+        guard crab !== hovered else { return }
+        hovered?.hideBubble()
+        removeAction(forKey: "hover")
+        hovered = crab
+        guard let crab else { return }
+        boostUntil = sceneTime + 1
+        run(.sequence([.wait(forDuration: Self.hoverDelay), .run { [weak crab] in crab?.showBubble() }]),
+            withKey: "hover")
+    }
+
+    /// A hovered crab can walk out from under a resting cursor; drop its bubble when it does.
+    private func hoverCheck() {
+        guard let h = hovered, crab(at: hoverPoint) !== h else { return }
+        setHovered(nil, at: nil)
     }
 
     // MARK: - Dragging
@@ -364,6 +482,7 @@ final class PlaypenScene: SKScene {
         let p = event.location(in: self)
         guard let crab = crab(at: p) else { return }
         dragged = crab
+        setHovered(nil, at: nil)
         dragOffset = CGPoint(x: crab.position.x - p.x, y: crab.position.y - p.y)
         lastDragX = p.x
         crab.removeAction(forKey: "settle")

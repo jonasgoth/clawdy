@@ -109,7 +109,10 @@ final class PlaypenController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.logCrabRect() }
     }
 
-    func hide() { panel.orderOut(nil) }
+    func hide() {
+        scene.setHovered(nil, at: nil)
+        panel.orderOut(nil)
+    }
 
     func reposition() {
         panel.setFrame(Self.stripFrame(), display: true)
@@ -119,12 +122,16 @@ final class PlaypenController {
     func updateMousePassthrough() {
         guard panel.isVisible else { return }
         let screenPoint = NSEvent.mouseLocation
-        var solid = scene.isDragging
-        if !solid, panel.frame.contains(screenPoint) {
+        var under: CrabNode?
+        var scenePoint: CGPoint?
+        if panel.frame.contains(screenPoint) {
             let windowPoint = panel.convertPoint(fromScreen: screenPoint)
-            let scenePoint = skView.convert(windowPoint, to: scene)
-            solid = scene.crab(at: scenePoint) != nil
+            let p = skView.convert(windowPoint, to: scene)
+            scenePoint = p
+            under = scene.crab(at: p)
         }
+        let solid = scene.isDragging || under != nil
+        scene.setHovered(scene.isDragging ? nil : under, at: scenePoint)   // the speech bubble
         if panel.ignoresMouseEvents == solid {
             panel.ignoresMouseEvents = !solid
             debugLog(solid ? "solid (cursor on crab)" : "pass-through")

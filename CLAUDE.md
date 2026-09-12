@@ -40,5 +40,9 @@ maps each `CrabStatus` to a sheet. Re-bake only when the SVGs change.
 
 - `PLAN.md` — the build plan, phases 0-5.
 - `Sources/Clawdy/SessionStore.swift` — decides each session's `CrabStatus`.
+- `Sources/Clawdy/DesktopLocalStorage.swift` — reads the Desktop app's own "unread" dot and
+  "chat on screen" record out of its web storage (LevelDB). That is the truth for "seen" on
+  Desktop Code chats, but it reaches disk late (seconds to ~2 min), so it corrects guesses
+  rather than replacing them.
 - `Sources/Clawdy/PlaypenScene.swift` — the per-frame brain (wander, unstack, tags).
 - `Sources/Clawdy/CrabNode.swift` — one crab: sprite, animation, name tag.
