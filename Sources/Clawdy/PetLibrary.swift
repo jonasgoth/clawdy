@@ -15,8 +15,13 @@ enum PetLibrary {
     private static var rows = 4
     private(set) static var fps: Double = 8
     private static var sheets: [String: Sheet] = [:]
-    /// The "working:<pet>" keys, in rotation order — one working animation per session.
+    /// The "working:<pet>" keys to draw from — one working animation per session.
     private static var workingKeys: [String] = []
+    /// Which working animation each session drew, remembered on disk so a crab keeps its own
+    /// personality across restarts.
+    private static let workingPickDefaultsKey = "workingPetBySession"
+    private static var workingPicks: [String: String] =
+        (UserDefaults.standard.dictionary(forKey: "workingPetBySession") as? [String: String]) ?? [:]
     private static var frameCache: [String: [SKTexture]] = [:]
     private static var loaded = false
 
@@ -49,14 +54,25 @@ enum PetLibrary {
         }
     }
 
-    /// The working animation this session keeps for life: a stable pick from the rotation,
-    /// so every crab has its own working personality but always the same one.
+    /// The working animation this session keeps for life: drawn at random the first time the
+    /// session is seen, then remembered, so every crab has its own working personality but always
+    /// the same one. The draw favours the animations fewest other sessions already took, so a
+    /// handful of crabs rarely end up as twins.
     static func workingKey(for id: String) -> String {
         load()
         guard !workingKeys.isEmpty else { return "working" }
-        var hash: UInt64 = 7919
-        for byte in id.utf8 { hash = (hash &* 131) &+ UInt64(byte) }
-        return workingKeys[Int(hash % UInt64(workingKeys.count))]
+        if let picked = workingPicks[id], workingKeys.contains(picked) { return picked }
+
+        var counts: [String: Int] = [:]
+        for key in workingPicks.values { counts[key, default: 0] += 1 }
+        let fewest = workingKeys.map { counts[$0] ?? 0 }.min() ?? 0
+        let candidates = workingKeys.filter { (counts[$0] ?? 0) == fewest }
+        let picked = candidates.randomElement() ?? workingKeys[0]
+
+        workingPicks[id] = picked
+        UserDefaults.standard.set(workingPicks, forKey: workingPickDefaultsKey)
+        if debug { FileHandle.standardError.write(Data("[pets] \(id) -> \(picked)\n".utf8)) }
+        return picked
     }
 
     /// Animation frames for a state key ("working", "moving", …), shared by every crab.
