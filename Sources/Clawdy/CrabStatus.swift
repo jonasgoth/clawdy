@@ -18,13 +18,15 @@ enum CrabStatus: Equatable {
     /// True when the crab wants your attention.
     var needsYou: Bool { self == .needsPermission || self == .needsQuestion }
 
-    /// True for the states the "seen" rule can clear.
-    var isUnseenFinish: Bool { self == .doneUnseen || self == .needsQuestion || self == .error }
+    /// True for the states the "seen" rule can clear. A question is not one of them: looking at it
+    /// does not answer it, so a seen question would wrongly relax into the done-and-seen crab while
+    /// it is still waiting on you. Only answering clears it (the tool_result lands in the transcript).
+    var isUnseenFinish: Bool { self == .doneUnseen || self == .error }
 
     /// Which side of the floor the crab lives on. Left is the working side: Claude is busy, or is
-    /// paused mid-task waiting for a permission. Right is the done side: the turn has ended
-    /// (finished, asked a question, hit an error, or went dormant).
-    var isWorkingSide: Bool { self == .working || self == .usingTool || self == .needsPermission }
+    /// paused mid-task waiting on you — a permission or a question, which block the same way and
+    /// belong together. Right is the done side: the turn is over (finished, errored, or dormant).
+    var isWorkingSide: Bool { self == .working || self == .usingTool || needsYou }
 }
 
 /// How to draw the badge for a status: SF Symbol name + circle color. Nil = no badge.

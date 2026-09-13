@@ -1,13 +1,68 @@
 import AppKit
 import SpriteKit
 
-/// Every crab wears the pets' own terracotta; there are no per-session colors.
+/// A crab's shell colour says which project it belongs to: every session running in the same folder
+/// wears the same shell, and only the shell moves — props, eyes and highlights stay as drawn.
+///
+/// Colours are handed out in the order you start working. The first folder you open wears the pets'
+/// own terracotta, the next blue, the next green, and so on down `projectHues`. Nothing is tied to a
+/// folder forever: once Claude has been quiet for `idleReset` the slate is wiped, so the next folder
+/// to turn up starts again at terracotta. Which project is orange therefore depends on where you
+/// started working, not on a calendar date — no midnight switch, and a day spent in one project
+/// keeps that project orange the whole way through.
 enum CrabPalette {
     /// The crab's own body color (terracotta), matching the artwork as drawn.
     static let standard = NSColor(srgbRed: 0.85, green: 0.47, blue: 0.34, alpha: 1)
 
     /// The hue the artwork is already drawn at, so nothing gets rotated.
     static let standardHueDegrees: CGFloat = PetLibrary.baseHueDegrees
+
+    /// Shell hues, in the order folders claim them. Terracotta first, so the folder you start in
+    /// looks exactly as the art was drawn. The rest are spread around the wheel so two projects on
+    /// screen never read as the same colour; past nine folders in one stretch it wraps and repeats.
+    static let projectHues: [CGFloat] = [standardHueDegrees, 205, 128, 280, 45, 170, 325, 95, 245]
+
+    /// Quiet for this long and the next crab starts the colours over from terracotta.
+    static let idleReset: TimeInterval = 4 * 3600
+
+    /// How often the idle clock is written to disk. It only has to be good to the minute — it
+    /// decides a four-hour gap — and the refresh behind it runs every second.
+    private static let activityWriteInterval: TimeInterval = 60
+
+    private static let huesKey = "projectHueByPath"
+    private static let activityKey = "projectHueLastActivity"
+
+    private static var assigned: [String: Double] =
+        (UserDefaults.standard.dictionary(forKey: "projectHueByPath") as? [String: Double]) ?? [:]
+    private static var lastActivity = UserDefaults.standard.double(forKey: "projectHueLastActivity")
+
+    /// Call at the top of each refresh, before any hue is asked for: if Claude has been quiet long
+    /// enough, forget who had which colour so the next folder to appear starts at terracotta. The
+    /// clock is on disk, so a gap counts whether Clawdy sat idle through it or was not running.
+    static func expireIfIdle(now: TimeInterval) {
+        guard !assigned.isEmpty, now - lastActivity >= idleReset else { return }
+        assigned = [:]
+        UserDefaults.standard.removeObject(forKey: huesKey)
+    }
+
+    /// Call at the end of each refresh, saying whether any crab was on screen. That is what keeps
+    /// the idle clock pushed forward.
+    static func noteActivity(hadCrabs: Bool, now: TimeInterval) {
+        guard hadCrabs else { return }
+        let writeDue = now - lastActivity >= activityWriteInterval
+        lastActivity = now
+        if writeDue { UserDefaults.standard.set(now, forKey: activityKey) }
+    }
+
+    /// The shell hue for one folder: the next colour in the list the first time that folder turns up
+    /// in this stretch of work, then the same colour until the slate is wiped.
+    static func hueDegrees(forProject key: String) -> CGFloat {
+        if let hue = assigned[key] { return CGFloat(hue) }
+        let picked = projectHues[assigned.count % projectHues.count]
+        assigned[key] = Double(picked)
+        UserDefaults.standard.set(assigned, forKey: huesKey)
+        return picked
+    }
 }
 
 /// One crab, standing for one Claude session (or, when `isBaby`, one sub-agent).
@@ -16,19 +71,25 @@ enum CrabPalette {
 /// pose itself says what the session is doing. Baby crabs (sub-agents) keep the small pixel crab.
 /// Origin is between the feet, so `position.y == floorY` means standing on the floor.
 final class CrabNode: SKNode {
+    /// Everything below is measured against a 120 pt cell; this shrinks the whole pet together.
+    static let petScale: CGFloat = 0.88
     /// Pet frame cell shown at this many points (sheets are rendered at 2x).
-    static let petSize: CGFloat = 120
+    static let petSize: CGFloat = 120 * petScale
     /// Measured from the sheets: the pet's shadow ends 21 of 240 px above the cell's bottom edge,
     /// so anchoring there puts the node origin right under the shadow.
     static let petAnchorY: CGFloat = 21.0 / 240.0
+    /// The same origin, but measured inside a frame whose shadow band has been cropped away — so a
+    /// carried crab loses its shadow without shifting under the cursor. It lands just below the
+    /// cropped frame, hence negative.
+    static let petCropAnchorY: CGFloat = (petAnchorY - PetLibrary.shadowBand) / (1 - PetLibrary.shadowBand)
     /// The standing body, relative to that origin: feet 3 pt up, 40 wide, 26 tall.
-    static let petBody = CGSize(width: 40, height: 26)
-    static let petBodyBottom: CGFloat = 3
+    static let petBody = CGSize(width: 40 * petScale, height: 26 * petScale)
+    static let petBodyBottom: CGFloat = 3 * petScale
     /// Name tag height above the origin: clear of the props that float over the head.
-    static let petTagY: CGFloat = 58
+    static let petTagY: CGFloat = 58 * petScale
     /// A seen-and-done session is not worth reading, so its tag fades back to this much opacity.
     static let restingTagAlpha: CGFloat = 0.35
-    static let babyScale: CGFloat = 0.6
+    static let babyScale: CGFloat = 0.42
     /// Status badges are off for now (the pet's pose already says it). Flip to bring them back.
     static var badgesEnabled = false
 
@@ -47,6 +108,20 @@ final class CrabNode: SKNode {
     private let badgeCircle = SKShapeNode(circleOfRadius: 8)
     private let badgeSymbol = SKSpriteNode()
 
+    /// The pet sheet on screen right now, so `applyFacing` knows which pose it is mirroring.
+    private var currentPetKey: String?
+
+    /// True while the crab is held in the air: it plays frames cropped just above the ground
+    /// shadow baked into the art, so no dark bar floats along underneath it.
+    private var shadowCropped = false {
+        didSet {
+            guard usesPet, shadowCropped != oldValue else { return }
+            sprite.size = CGSize(width: Self.petSize,
+                                 height: Self.petSize * (shadowCropped ? 1 - PetLibrary.shadowBand : 1))
+            sprite.anchorPoint = CGPoint(x: 0.5, y: shadowCropped ? Self.petCropAnchorY : Self.petAnchorY)
+        }
+    }
+
     private var status: CrabStatus = .working
     private var hueDegrees: CGFloat = PetLibrary.baseHueDegrees
     /// This crab's own working animation, picked once from the rotation and kept for life.
@@ -56,9 +131,21 @@ final class CrabNode: SKNode {
     private var tintedIdle: SKTexture { tintedWalk.first ?? CrabSprite.idleTexture }
 
     var title: String = "" { didSet { if title != oldValue { updateLabel() } } }
-    var projectColor: NSColor = CrabPalette.standard { didSet { if projectColor != oldValue { applyColor() } } }
+    /// This crab's project shell hue, in degrees. See `CrabPalette`.
+    var projectHue: CGFloat = CrabPalette.standardHueDegrees { didSet { if projectHue != oldValue { applyColor() } } }
 
-    var facingRight = true { didSet { sprite.xScale = (facingRight ? 1 : -1) * abs(sprite.xScale) } }
+    /// Unflipped, the art walks *left*: the planted leg sweeps toward +x, which shoves the body
+    /// the other way. So facing right is the mirrored sprite, not the plain one.
+    var facingRight = true { didSet { if facingRight != oldValue { applyFacing() } } }
+
+    /// Poses whose art carries a prop that reads wrong back-to-front — the "200" crab holds a
+    /// green check — so they always play unmirrored, whichever way the crab was last headed.
+    private static let unmirroredPets: Set<String> = ["doneUnseen"]
+    private var canMirror: Bool { !Self.unmirroredPets.contains(currentPetKey ?? "") }
+
+    private func applyFacing() {
+        sprite.xScale = (facingRight && canMirror ? -1 : 1) * abs(sprite.xScale)
+    }
 
     /// The body's footprint (not the whole pet cell), used for spacing and clamping.
     var size: CGSize { usesPet ? Self.petBody : sprite.size }
@@ -78,8 +165,10 @@ final class CrabNode: SKNode {
     var tagLevel = 0 {
         didSet {
             guard tagLevel != oldValue else { return }
-            tagNode.removeAllActions()
-            tagNode.run(.moveTo(y: tagBaseY + CGFloat(tagLevel) * 15, duration: 0.15))
+            // Only cancel a previous lift — killing every action here would also kill an
+            // in-flight fade and strand the tag half-dim until the next status change.
+            tagNode.removeAction(forKey: "lift")
+            tagNode.run(.moveTo(y: tagBaseY + CGFloat(tagLevel) * 15, duration: 0.15), withKey: "lift")
         }
     }
 
@@ -95,8 +184,12 @@ final class CrabNode: SKNode {
     /// plus where it set off from and how far along it is, so the scene can ease the run.
     private(set) var dashTarget: CGFloat?
     private(set) var dashFromX: CGFloat = 0
-    private(set) var dashDuration: TimeInterval = 0
+    private(set) var dashGait = Gait()
     var dashElapsed: TimeInterval = 0
+    /// The same three for a stroll: where it set off from, how far along it is, and its speed curve.
+    private(set) var wanderFromX: CGFloat = 0
+    private(set) var wanderGait = Gait()
+    var wanderElapsed: TimeInterval = 0
     var isDashing: Bool { dashTarget != nil }
     /// How much faster the legs go at full sprint than during a stroll.
     static let dashGaitSpeed: CGFloat = 2.5
@@ -120,6 +213,7 @@ final class CrabNode: SKNode {
         }
         sprite.anchorPoint = CGPoint(x: 0.5, y: usesPet ? Self.petAnchorY : 0)
         super.init()
+        applyFacing()
         addChild(sprite)
         if !isBaby { buildNameTag(); addChild(bubble) }
         buildBadge()
@@ -154,17 +248,22 @@ final class CrabNode: SKNode {
     private func updateLabel() {
         guard !isBaby else { return }
         let short = title.count > 17 ? String(title.prefix(16)) + "…" : title
+        // No chat title yet (just-started or shutting-down session): no tag at all.
+        tagNode.isHidden = short.isEmpty
         nameLabel.text = short
         let w = max(nameLabel.frame.width + 14, 24), h: CGFloat = 15
-        tagWidth = w
+        tagWidth = short.isEmpty ? 0 : w
         nameBackground.path = CGPath(roundedRect: CGRect(x: -w / 2, y: -h / 2, width: w, height: h),
                                      cornerWidth: 4, cornerHeight: 4, transform: nil)
     }
 
     /// Dim the whole tag (pill + text) once the session is done and seen; full strength otherwise.
+    /// A sleeping crab is a seen crab that has rested a minute, so its tag stays dim too —
+    /// otherwise the name flashes back to full white a minute after you read the chat.
     private func updateTagFade() {
         guard !isBaby else { return }
-        let wanted: CGFloat = status == .doneSeen ? Self.restingTagAlpha : 1
+        let resting = status == .doneSeen || status == .dormant
+        let wanted: CGFloat = resting ? Self.restingTagAlpha : 1
         guard abs(tagNode.alpha - wanted) > 0.01 else { return }
         tagNode.removeAction(forKey: "fade")
         tagNode.run(.fadeAlpha(to: wanted, duration: 0.45), withKey: "fade")
@@ -176,6 +275,11 @@ final class CrabNode: SKNode {
     var detail: CrabDetail? {
         didSet { if detail != oldValue, bubble.isShowing { refreshBubble() } }
     }
+    /// Where a click on this crab takes you (nil while we don't know the session's chat).
+    var openTarget: SessionOpener.Target?
+    /// Whose chat that is. A baby carries its parent's session id, so opening from a baby marks
+    /// the parent seen.
+    var openSessionId: String?
     /// Sub-agents working for this session right now (the scene counts its babies).
     var helpers = 0 {
         didSet { if helpers != oldValue, bubble.isShowing { refreshBubble() } }
@@ -194,6 +298,7 @@ final class CrabNode: SKNode {
         let lines = (detail ?? CrabDetail()).lines(status: status, helpers: helpers, now: now)
         bubble.position = CGPoint(x: 0, y: tagBaseY + CGFloat(tagLevel) * 15 + 7.5 + 3)
         bubble.render(lines: lines, dotColor: HoverBubble.dotColor(for: status),
+                      spinning: status == .working || status == .usingTool,
                       worldX: position.x, sceneWidth: scene?.size.width ?? .greatestFiniteMagnitude)
     }
 
@@ -242,7 +347,7 @@ final class CrabNode: SKNode {
     // MARK: - Color
 
     private func applyColor() {
-        hueDegrees = CrabPalette.standardHueDegrees
+        hueDegrees = projectHue
         if usesPet {
             // The pet's frames are shared; the colour is a per-sprite shader value.
             sprite.setValue(PetLibrary.hueValue(degrees: hueDegrees), forAttribute: PetLibrary.hueAttribute)
@@ -298,8 +403,10 @@ final class CrabNode: SKNode {
     }
 
     private func playPet(_ key: String, loop: Bool, completion: (() -> Void)? = nil) {
-        let frames = PetLibrary.frames(key)
+        let frames = PetLibrary.frames(key, withoutShadow: shadowCropped)
         guard !frames.isEmpty else { return }
+        currentPetKey = key
+        applyFacing()
         sprite.removeAction(forKey: "gait")
         let anim = SKAction.animate(with: frames, timePerFrame: 1.0 / PetLibrary.fps, resize: false, restore: false)
         if loop {
@@ -315,7 +422,14 @@ final class CrabNode: SKNode {
     private func pixelGait() {
         switch status {
         case .working:
-            march(timePerFrame: 0.07)
+            // A baby only churns its legs while it is walking (the scene calls `startMoving`);
+            // standing next to its parent it just bobs.
+            if isBaby {
+                sprite.texture = tintedIdle
+                breathe()
+            } else {
+                march(timePerFrame: 0.07)
+            }
         case .usingTool:
             sprite.texture = tintedIdle
             breathe()
@@ -426,12 +540,12 @@ final class CrabNode: SKNode {
         applyGait(force: true)
     }
 
-    /// Run (fast) to `x`, the crab's spot on its new side, over `duration` seconds.
+    /// Run (fast) to `x`, the crab's spot on its new side, on the speed curve in `gait`.
     /// Any stroll in progress is dropped.
-    func startDash(to x: CGFloat, duration: TimeInterval) {
+    func startDash(to x: CGFloat, gait: Gait) {
         dashTarget = x
         dashFromX = position.x
-        dashDuration = max(duration, 0.35)
+        dashGait = gait
         dashElapsed = 0
         wanderTarget = nil
         facingRight = x > position.x
@@ -441,9 +555,25 @@ final class CrabNode: SKNode {
         startMoving()
     }
 
+    /// Stroll to `x` at walking pace, on the speed curve in `gait`.
+    func startStroll(to x: CGFloat, gait: Gait) {
+        wanderTarget = x
+        wanderFromX = position.x
+        wanderGait = gait
+        wanderElapsed = 0
+        facingRight = x > position.x
+        startMoving()
+    }
+
     /// How hard the legs are going right now: 0 is a walk, 1 is a full sprint.
     func setDashPace(_ pace: CGFloat) {
         sprite.speed = 1 + (Self.dashGaitSpeed - 1) * min(max(pace, 0), 1)
+    }
+
+    /// The same for a stroll: the walk cycle winds up and down with the crab, so it never looks
+    /// like it is skating across the floor as it sets off or stops.
+    func setStrollPace(_ pace: CGFloat) {
+        sprite.speed = 0.5 + 0.5 * min(max(pace, 0), 1)
     }
 
     /// Arrived on the other side: settle into the status pose.
@@ -457,6 +587,7 @@ final class CrabNode: SKNode {
         wanderTarget = nil
         dashTarget = nil
         isMoving = false
+        shadowCropped = false   // a crab can be dropped from the hand straight into leaving
         sprite.speed = 1
         removeAction(forKey: "hop"); removeAction(forKey: "zzz"); removeAction(forKey: "celebrate")
         sprite.zRotation = 0; sprite.yScale = 1; sprite.alpha = 1
@@ -475,10 +606,12 @@ final class CrabNode: SKNode {
         sprite.speed = 1
         removeAction(forKey: "hop"); removeAction(forKey: "zzz"); removeAction(forKey: "celebrate")
         sprite.zRotation = 0; sprite.yScale = 1; sprite.alpha = 1
+        shadowCropped = usesPet
         if usesPet { playPet("moving", loop: true) } else { march(timePerFrame: 0.05) }
     }
 
     func restoreStatus() {
+        shadowCropped = false
         applyGait(force: true)
     }
 }

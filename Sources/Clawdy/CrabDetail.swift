@@ -27,9 +27,23 @@ struct CrabDetail: Equatable {
             .filter { !$0.isEmpty }
     }
 
+    /// The words Claude Code spins through in the terminal while it thinks. Mostly silly on
+    /// purpose — that is the joke upstream, and the bubble borrows it.
+    static let thinkingWords = ["Pondering", "Noodling", "Booping", "Frolicking", "Honking",
+                                "Schlepping", "Smooshing", "Wibbling", "Percolating", "Simmering"]
+
+    /// One word per turn, picked from the turn's start time and the project name. Deterministic,
+    /// so the bubble does not reshuffle every second it refreshes — but a new turn gets a new word.
+    var thinkingWord: String {
+        var h: UInt64 = 5381
+        for b in project.utf8 { h = (h &* 33) &+ UInt64(b) }
+        h = (h &* 33) &+ UInt64(max(since, 0))
+        return Self.thinkingWords[Int(h % UInt64(Self.thinkingWords.count))]
+    }
+
     private func headline(status: CrabStatus) -> String {
         switch status {
-        case .working, .usingTool: return tool.map { "Running \($0)" } ?? "Thinking"
+        case .working, .usingTool: return tool.map { "Running \($0)" } ?? "\(thinkingWord)…"
         case .needsPermission:     return tool.map { "Wants to run \($0)" } ?? "Waiting for your OK"
         case .needsQuestion:       return "Asked you a question"
         case .doneUnseen:          return "Done. Take a look"

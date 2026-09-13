@@ -6,18 +6,28 @@ import AppKit
 /// hands the scene a snapshot on the main thread. All file I/O stays off the main thread so the
 /// crabs never stutter.
 final class SessionStore {
-    struct CrabSnapshot { let id: String; let title: String; let color: NSColor; let status: CrabStatus; var detail = CrabDetail() }
-    struct BabySnapshot { let id: String; let parentId: String; let color: NSColor }
+    struct CrabSnapshot { let id: String; let title: String; let hue: CGFloat; let status: CrabStatus; var detail = CrabDetail(); var open: SessionOpener.Target? = nil }
+    struct BabySnapshot { let id: String; let parentId: String; let hue: CGFloat }
     struct Snapshot { var crabs: [CrabSnapshot] = []; var babies: [BabySnapshot] = [] }
-    struct Row { let title: String; let status: CrabStatus }
+    struct Row { let id: String; let title: String; let status: CrabStatus; let lastActivity: TimeInterval; var open: SessionOpener.Target? = nil }
 
     static let dormantAfter: TimeInterval = 600      // 10 minutes with no activity
     static let hideAfterIdle: TimeInterval = 300     // idle this long → the pet leaves (menu still lists it)
+    static let dropFromMenu: TimeInterval = 600      // idle this long → the menu forgets it too
     static let sleepAfterSeen: TimeInterval = 60     // a crab you have looked at rests this long, then sleeps
     static let permissionGuessDelay: TimeInterval = 6
     static let bashPermissionDelay: TimeInterval = 600
     static let lookDuration: TimeInterval = 1.5      // how long the chat must be in front to count as seen
     static let storageMargin: TimeInterval = 2       // Desktop's record must postdate a finish by this much to speak for it
+
+    /// What "the same project" means for shell colour: the folder the session runs in. The full path,
+    /// not its last component, so two different checkouts both called "app" stay two colours.
+    static func projectKey(for session: LiveSession) -> String {
+        session.cwd.isEmpty ? session.projectName : session.cwd
+    }
+
+    /// Cowork sessions run in a sandbox with no folder of their own, so they all share one shell.
+    static let coworkProjectKey = "cowork"
     static let coworkFallbackLook: TimeInterval = 3  // without Accessibility we can't tell which Cowork chat is up
 
     private weak var scene: PlaypenScene?
@@ -40,6 +50,7 @@ final class SessionStore {
     static let storageRescan: TimeInterval = 2       // FSEvents stays quiet for appends to Desktop's storage log, so poll it (a few stats)
     private var seenDoneAt: [String: Double] = [:]   // session id → the finish time that has been seen
     private var seenAt: [String: Double] = [:]       // session id → when you first saw that finish
+    private var openedAt: [String: Double] = [:]     // session id → when a click of ours took you to that chat
 
     /// Main-thread copy for the menu.
     private(set) var rows: [Row] = []
@@ -68,6 +79,19 @@ final class SessionStore {
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
         timer = t
+    }
+
+    /// A click on a crab or a menu row took you to this chat. The app just put it in front of you,
+    /// so the finish it was showing counts as seen right now — no waiting for Desktop's own records,
+    /// which lag by up to a minute. Called on the main thread.
+    func markOpened(_ id: String) {
+        let now = Date().timeIntervalSince1970
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.openedAt[id] = now
+            self.log("opened \(id.prefix(8)) by click -> counts as seen")
+            self.tick()          // so the badge clears at once instead of on the next second
+        }
     }
 
     // MARK: - Tick (background queue)
@@ -107,6 +131,8 @@ final class SessionStore {
         var snapshot = Snapshot()
         var newRows: [Row] = []
         var liveIds: Set<String> = []
+        // A long enough gap since the last crab starts the shell colours over (see CrabPalette).
+        CrabPalette.expireIfIdle(now: now)
 
         for session in live.sorted(by: { $0.startedAt < $1.startedAt }) {
             let meta = desktopMeta.meta(for: session.sessionId)
@@ -123,7 +149,7 @@ final class SessionStore {
                 // fresh timestamps, which would move the target and un-see the crab.)
                 let doneAt = reader.idleSince > 0 ? reader.idleSince
                     : (reader.toolUnanswered ? reader.lastToolUseTime : reader.lastEventTime)
-                let seenNow: Bool
+                var seenNow: Bool
                 switch desktopVerdict(meta: meta, doneAt: doneAt, look: look, now: now) {
                 case .seen:   seenNow = true                      // Desktop's own unread dot decides…
                 case .unseen: seenNow = false; seenDoneAt[session.sessionId] = nil   // …and overrules an earlier guess
@@ -131,6 +157,9 @@ final class SessionStore {
                 case nil:     seenNow = seenDoneAt[session.sessionId] == doneAt      // Desktop's record is too old to say
                     || isSeen(session: session, doneAt: doneAt, meta: meta, look: look, now: now)
                 }
+                // We took you there ourselves (crab or menu click), after it finished: that is not a
+                // guess, so it beats every other signal — including Desktop's minute-old unread dot.
+                if openedAt[session.sessionId] ?? 0 >= doneAt - 0.5 { seenNow = true }
                 let stuckUnseen = Self.debug && !seenNow && now - (lastSeenCheckLog[session.sessionId] ?? 0) > 5
                 if Self.debug, stuckUnseen || (lastLogged[session.sessionId] != (seenNow ? .doneSeen : status)
                    && !(seenNow && lastLogged[session.sessionId] == .dormant)) {
@@ -150,24 +179,38 @@ final class SessionStore {
                 }
             } else if status.isBusy {
                 seenDoneAt[session.sessionId] = nil           // new turn → next finish is unseen again
+                openedAt[session.sessionId] = nil             // an old visit says nothing about a new finish
             }
             status = restOrSleep(id: session.sessionId, status: status, now: now)
 
-            let title = meta?.title ?? reader.title ?? session.name
-            let color = CrabPalette.standard
-            let idleFor = status.isBusy ? 0 : now - (reader.lastEventTime == 0 ? now : reader.lastEventTime)
+            // Only a real chat title goes on the crab's tag; the registry name ("goth-68")
+            // is a placeholder for the menu, not something to show over the pet.
+            // Where a click on this row (or its crab) goes: the Desktop chat if there is one,
+            // otherwise the terminal window the session is running in.
+            let open = SessionOpener.desktopTarget(localId: meta?.localId)
+                ?? tty(for: session.pid).map { .terminal(tty: $0, pid: session.pid) }
+
+            let chatTitle = meta?.title ?? reader.title
+            let title = chatTitle ?? session.name
+            let hue = CrabPalette.hueDegrees(forProject: Self.projectKey(for: session))
+            let activity = reader.lastEventTime > 0 ? reader.lastEventTime
+                : (session.startedAt > 0 ? session.startedAt : now)
+            let idleFor = status.isBusy ? 0 : now - activity
+            if !status.isBusy, !status.needsYou, idleFor > Self.dropFromMenu {
+                continue                                             // stale chat: off the menu entirely
+            }
             if !status.isBusy, !status.needsYou, idleFor > Self.hideAfterIdle {
-                newRows.append(Row(title: title, status: .dormant))   // listed, but the pet has left
+                newRows.append(Row(id: session.sessionId, title: title, status: .dormant, lastActivity: activity, open: open))   // listed, but the pet has left
                 if Self.debug { lastLogged[session.sessionId] = status }   // keeps the seen-check log quiet
                 continue
             }
-            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: title, color: color, status: status,
-                                               detail: detail(for: session, reader: reader, status: status)))
-            newRows.append(Row(title: title, status: status))
+            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: chatTitle ?? "", hue: hue, status: status,
+                                               detail: detail(for: session, reader: reader, status: status), open: open))
+            newRows.append(Row(id: session.sessionId, title: title, status: status, lastActivity: activity, open: open))
 
             if status.isBusy, let dir = reader.subagentsDirectory {
                 for agentId in SubagentWatcher.activeAgents(in: dir, now: now) {
-                    snapshot.babies.append(BabySnapshot(id: agentId, parentId: session.sessionId, color: color))
+                    snapshot.babies.append(BabySnapshot(id: agentId, parentId: session.sessionId, hue: hue))
                 }
             }
         }
@@ -178,23 +221,38 @@ final class SessionStore {
             if status.isUnseenFinish {
                 let doneAt = session.lastActivity
                 if seenDoneAt[session.sessionId] == doneAt
+                    || openedAt[session.sessionId] ?? 0 >= doneAt - 0.5
                     || isCoworkSeen(title: session.title, doneAt: doneAt, look: look, now: now) {
                     seenDoneAt[session.sessionId] = doneAt
                     status = .doneSeen
                 }
             } else if status.isBusy {
                 seenDoneAt[session.sessionId] = nil
+                openedAt[session.sessionId] = nil
             }
             status = restOrSleep(id: session.sessionId, status: status, now: now)
+            if !status.isBusy, !status.needsYou, now - session.lastActivity > Self.dropFromMenu {
+                continue                                             // stale chat: off the menu entirely
+            }
             if !status.isBusy, !status.needsYou, now - session.lastActivity > Self.hideAfterIdle {
-                newRows.append(Row(title: session.title, status: .dormant))
+                newRows.append(Row(id: session.sessionId, title: session.title, status: .dormant, lastActivity: session.lastActivity,
+                                   open: SessionOpener.desktopTarget(localId: session.localId, path: "needs-input")))
                 continue
             }
-            let color = CrabPalette.standard
-            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: session.title, color: color, status: status,
+            let hue = CrabPalette.hueDegrees(forProject: Self.coworkProjectKey)
+            let open = SessionOpener.desktopTarget(localId: session.localId, path: "needs-input")
+            snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: session.title, hue: hue, status: status,
                                                detail: CrabDetail(project: session.projectName, source: "Cowork",
-                                                                  since: session.lastActivity)))
-            newRows.append(Row(title: session.title, status: status))
+                                                                  since: session.lastActivity), open: open))
+            newRows.append(Row(id: session.sessionId, title: session.title, status: status, lastActivity: session.lastActivity, open: open))
+        }
+
+        CrabPalette.noteActivity(hadCrabs: !snapshot.crabs.isEmpty, now: now)
+
+        // Menu order: busy first, then the ones waiting on you, then the rest — newest update on top.
+        newRows.sort {
+            let a = Self.rank($0.status), b = Self.rank($1.status)
+            return a == b ? $0.lastActivity > $1.lastActivity : a < b
         }
 
         if Self.debug {
@@ -207,6 +265,7 @@ final class SessionStore {
         for id in Set(readers.keys).subtracting(liveIds) { readers[id] = nil }
         for id in Set(seenDoneAt.keys).subtracting(liveIds) { seenDoneAt[id] = nil }
         for id in Set(seenAt.keys).subtracting(liveIds) { seenAt[id] = nil }
+        for id in Set(openedAt.keys).subtracting(liveIds) { openedAt[id] = nil }
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -214,6 +273,13 @@ final class SessionStore {
             self.scene?.apply(snapshot)
             self.onUpdate?()
         }
+    }
+
+    /// Menu grouping: 0 = still thinking/working, 1 = waiting on you, 2 = finished or asleep.
+    private static func rank(_ status: CrabStatus) -> Int {
+        if status.isBusy { return 0 }
+        if status.needsYou { return 1 }
+        return 2
     }
 
     /// What the hover bubble says: the project, where it runs, the tool in hand, and when the
@@ -250,11 +316,14 @@ final class SessionStore {
     private func resolve(reader: TranscriptReader, hook: HookBridge.Event?, now: Double) -> CrabStatus {
         // Hooks are ground truth when present and at least as fresh as the transcript.
         let hookState = hook.flatMap { $0.ts + 1 >= reader.lastEventTime ? $0.state : nil }
-        if hookState == "permission" { return .needsPermission }
 
         // A question tool (AskUserQuestion, ExitPlanMode) is parked waiting for you, not running.
-        // The hook only says "tool" for it, so this has to come before the hook's tool state.
+        // The hook only says "tool" or "permission" for it and carries no tool name, so this has to
+        // come before both hook states: being asked a question is what you need to see, whether or
+        // not the tool also needs an approval first.
         if reader.toolUnanswered, Self.questionTools.contains(reader.lastToolName) { return .needsQuestion }
+
+        if hookState == "permission" { return .needsPermission }
 
         if hookState == "tool" { return .usingTool }
 

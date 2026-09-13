@@ -80,6 +80,17 @@ final class TranscriptReader {
         case "ai-title":
             if let t = obj["aiTitle"] as? String, !t.isEmpty, title == nil { title = t }
         case "user":
+            // You pressed stop. The turn ends right there and nothing else is coming until you
+            // type again — without this the crab keeps "working" (or begging for a permission that
+            // will never be answered) until it finally goes dormant.
+            if isInterrupt(obj) {
+                idle = true
+                idleSince = recordTime > 0 ? recordTime : lastEventTime
+                toolUnanswered = false
+                endedWithQuestion = false
+                errored = false
+                return
+            }
             // A new prompt or a returned tool result: Claude has more to do. Only a prompt that
             // follows a finished turn starts a new one (Desktop slips other user records in mid-turn).
             if !isToolResult(obj), idle || turnStartedAt == 0 {
@@ -132,6 +143,21 @@ final class TranscriptReader {
 
     private func setPermissionMode(_ mode: String) {
         permissionModeIsAuto = ["auto", "bypassPermissions", "acceptEdits", "plan"].contains(mode)
+    }
+
+    /// The record Claude writes when you interrupt a turn: a user message whose only text is
+    /// "[Request interrupted by user]" (or "...by user for tool use]" when a tool was in hand).
+    private func isInterrupt(_ obj: [String: Any]) -> Bool {
+        guard let message = obj["message"] as? [String: Any] else { return false }
+        if let text = message["content"] as? String { return Self.isInterruptText(text) }
+        guard let content = message["content"] as? [[String: Any]] else { return false }
+        return content.contains {
+            ($0["type"] as? String) == "text" && Self.isInterruptText($0["text"] as? String ?? "")
+        }
+    }
+
+    private static func isInterruptText(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("[Request interrupted by user")
     }
 
     private func isToolResult(_ obj: [String: Any]) -> Bool {

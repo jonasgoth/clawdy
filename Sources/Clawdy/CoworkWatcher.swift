@@ -10,6 +10,7 @@ import Foundation
 final class CoworkWatcher {
     struct Session {
         let sessionId: String
+        let localId: String          // Desktop's own id ("local_…"), what the claude:// link wants
         let title: String
         let projectName: String
         let status: CrabStatus
@@ -41,8 +42,9 @@ final class CoworkWatcher {
             guard let m = cachedMeta(meta), !m.archived else { continue }
             let outcome = Self.interpret(tail: Self.tailString(ofPath: audit, maxBytes: 48_000))
             if outcome.ended { continue }
+            let localId = ((meta as NSString).lastPathComponent as NSString).deletingPathExtension
             let id = "cowork:" + (m.cliId ?? (meta as NSString).lastPathComponent)
-            out.append(Session(sessionId: id, title: m.title, projectName: "cowork-\(m.title)",
+            out.append(Session(sessionId: id, localId: localId, title: m.title, projectName: "cowork-\(m.title)",
                                status: outcome.status, lastActivity: auditMtime))
         }
         return out

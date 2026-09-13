@@ -17,10 +17,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let soundItem = NSMenuItem(title: "Sounds", action: #selector(toggleSounds), keyEquivalent: "")
     private var sessionSeparatorTop: NSMenuItem!
 
+    /// Rows for busy sessions: their Claude asterisk is redrawn on a timer while the menu is open.
+    private var spinningRows: [NSMenuItem] = []
+    private var spinTimer: Timer?
+    private var spinFrame = 0
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         playpen = PlaypenController()
         seen.start()
         store = SessionStore(scene: playpen.scene, seen: seen)
+        // Clicking a crab opened that chat, so the store can stop calling it unseen.
+        playpen.scene.onOpened = { [weak self] id in self?.store.markOpened(id) }
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
@@ -49,6 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(axItem)
         soundItem.target = self
         menu.addItem(soundItem)
+        // macOS gives Quit its own icon, so the other actions get one too and the column lines up.
+        reset.image = Self.actionIcon("sparkles")
+        hooksItem.image = Self.actionIcon("bolt")
+        axItem.image = Self.actionIcon("macwindow")
+        soundItem.image = Self.actionIcon("speaker.wave.2")
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Clawdy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -77,13 +89,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         soundItem.state = SoundPlayer.enabled ? .on : .off
     }
 
-    func menuWillOpen(_ menu: NSMenu) { rebuildSessionRows() }
+    func menuWillOpen(_ menu: NSMenu) {
+        rebuildSessionRows()
+        spinFrame = 0
+        spinTimer?.invalidate()
+        guard !spinningRows.isEmpty else { return }
+        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.spinTick() }
+        RunLoop.main.add(t, forMode: .common)   // .common covers menu tracking, so it keeps ticking
+        spinTimer = t
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        spinTimer?.invalidate()
+        spinTimer = nil
+        spinningRows = []
+    }
+
+    private func spinTick() {
+        spinFrame = (spinFrame + 1) % ClaudeMark.steps
+        let frame = ClaudeMark.image(step: spinFrame)
+        for item in spinningRows { item.image = frame }
+    }
+
+    /// A plain menu-action icon, in the grey AppKit uses for the ones it adds itself.
+    private static func actionIcon(_ name: String) -> NSImage? {
+        let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        image?.isTemplate = true
+        return image
+    }
+
+    /// The little mark in front of a session row: a tinted SF Symbol for every resting state.
+    private static func markImage(_ status: CrabStatus) -> NSImage? {
+        let style = BadgeStyle.forStatus(status)
+        let name = style?.symbol ?? "circle"
+        let color = style?.color ?? NSColor.tertiaryLabelColor
+        let config = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        image?.size = NSSize(width: 14, height: 14)
+        return image
+    }
 
     @objc private func togglePlaypen() {
         if playpen.isVisible { playpen.hide() } else { playpen.show() }
     }
 
     @objc private func resetCrabs() { playpen.scene.resetCrabs() }
+
+    /// Session rows are a readout, not a button — but they need an action to avoid being greyed out.
+    @objc private func noop() {}
+
+    /// Jump to the chat: the Desktop app switches to it, or its terminal window comes forward.
+    /// Landing there is proof you have seen it, so the crab drops its badge.
+    @objc private func openSession(_ sender: NSMenuItem) {
+        guard let request = sender.representedObject as? SessionOpener.Request else { return }
+        if SessionOpener.open(request.target) { store.markOpened(request.sessionId) }
+    }
 
     @objc private func toggleHooks() {
         if HookInstaller.isInstalled {
@@ -127,35 +191,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ? "No sessions running"
             : "\(rows.count) session\(rows.count == 1 ? "" : "s") running"
         toggleItem.title = playpen.isVisible ? "Hide playpen" : "Show playpen"
+        toggleItem.image = Self.actionIcon(playpen.isVisible ? "eye.slash" : "eye")
         hooksItem.title = HookInstaller.isInstalled ? "Turn off instant updates" : "Turn on instant updates…"
         soundItem.state = SoundPlayer.enabled ? .on : .off
         let trusted = AXIsProcessTrusted()
         axItem.title = trusted ? "Window checks: on" : "Allow window checks…"
         axItem.isEnabled = !trusted
 
-        let topIndex = menu.index(of: sessionSeparatorTop)
-        while topIndex > 0, let item = menu.item(at: topIndex - 1), item !== crabCountItem {
-            menu.removeItem(item)
+        // Drop the old session rows: everything between the count line and the separator.
+        // The index has to be re-read each pass, or the loop walks off the end and eats the
+        // separator plus the actions below it (that is why the menu sometimes came up bare).
+        let firstRow = menu.index(of: crabCountItem) + 1
+        while firstRow < menu.numberOfItems, menu.item(at: firstRow) !== sessionSeparatorTop {
+            menu.removeItem(at: firstRow)
         }
         var insertAt = menu.index(of: sessionSeparatorTop)
+        spinningRows = []
         for row in rows {
-            let item = NSMenuItem(title: "\(Self.glyph(row.status))  \(row.title)", action: nil, keyEquivalent: "")
-            item.isEnabled = false
+            let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
+            if row.status.isBusy {
+                item.image = ClaudeMark.image(step: spinFrame)
+                spinningRows.append(item)
+            } else {
+                item.image = Self.markImage(row.status)
+            }
+            // Live rows draw full-strength (macOS greys out disabled items, which muted the
+            // asterisk). Desktop chats open on click; a terminal session has nothing to open,
+            // so its row keeps the no-op and stays a plain readout.
+            item.representedObject = row.open.map { SessionOpener.Request(sessionId: row.id, target: $0) }
+            item.action = row.open == nil ? #selector(noop) : #selector(openSession(_:))
+            item.toolTip = row.open == nil ? nil : "Go to this chat"
+            item.target = self
             menu.insertItem(item, at: insertAt)
             insertAt += 1
         }
     }
 
-    private static func glyph(_ status: CrabStatus) -> String {
-        switch status {
-        case .needsPermission: return "🔴"
-        case .needsQuestion:   return "🟠"
-        case .error:           return "⚠️"
-        case .doneUnseen:      return "🟢"
-        case .doneSeen:        return "○"
-        case .usingTool:       return "🔧"
-        case .dormant:         return "💤"
-        case .working:         return "●"
-        }
-    }
 }

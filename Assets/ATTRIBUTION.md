@@ -8,8 +8,12 @@ sheets in `Assets/pets/*.png` (headless Chrome + the Web Animations API). The ap
 "happy" pet on a rounded square.
 
 State → pet: working = coding · moving = crab-walking · tool = working-tool-calling ·
-permission = praying · question = confused · done = celebrating · done & seen = idle-living ·
+permission = praying · question = asking* · done = celebrating · done & seen = idle-living ·
 dormant = sleeping · error = dizzy · leaving = going-away.
+
+\* `clawd-asking.svg` is a derivative, not an upstream pet: the crab body reuses clawd-pet's
+shape and palette so it matches the set, while the bouncing "!", the pulsing attention ring and
+the hop/claw-wave were drawn for Clawdy. Same MIT terms as the rest.
 
 ## Sub-agent baby crabs: pixel crab
 `Assets/crab-walk-strip.png` — 20-frame pixel-art crab walk cycle, 51×36 px per frame, extracted

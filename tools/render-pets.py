@@ -6,7 +6,10 @@ For each state we inline N copies of the SVG into one HTML page, freeze every co
 a different time with the Web Animations API, and screenshot the page once with headless Chrome.
 Output: Assets/pets/<state>.png (grid of frames) + Assets/pets/manifest.json.
 
-Usage: tools/render-pets.py [path/to/clawd-pet/public/pets]   (defaults to Assets/pets/src)
+Usage: tools/render-pets.py [path/to/clawd-pet/public/pets] [--only STATE ...]
+
+--only re-bakes just those states and merges them into the existing manifest, so a single
+changed SVG does not rewrite every other sheet (defaults to Assets/pets/src).
 """
 import json, os, re, shutil, subprocess, sys, tempfile
 
@@ -19,7 +22,7 @@ CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 STATES = {
     "moving": "crab-walking",
     "needsPermission": "praying",
-    "needsQuestion": "confused",
+    "needsQuestion": "asking",
     "doneUnseen": "200",
     "doneSeen": "idle-living",
     "dormant": "sleeping",
@@ -46,12 +49,24 @@ LOOP_MS = 4000      # animation loop we sample
 FPS = COLS * ROWS / (LOOP_MS / 1000)
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else SRC_VENDOR
+    argv = sys.argv[1:]
+    only = []
+    if "--only" in argv:
+        i = argv.index("--only")
+        only = argv[i + 1:]
+        argv = argv[:i]
+    src = argv[0] if argv else SRC_VENDOR
     os.makedirs(SRC_VENDOR, exist_ok=True)
     manifest = {"cell": CELL, "cols": COLS, "rows": ROWS, "fps": FPS,
                 "workingVariants": [f"working:{p}" for p in WORKING_PETS], "states": {}}
+    manifest_path = os.path.join(OUT, "manifest.json")
+    if only and os.path.exists(manifest_path):
+        manifest["states"] = json.load(open(manifest_path)).get("states", {})
+    todo = {k: v for k, v in STATES.items() if not only or k in only}
+    if only and not todo:
+        sys.exit(f"no such state(s): {', '.join(only)}")
     with tempfile.TemporaryDirectory() as tmp:
-        for state, pet in STATES.items():
+        for state, pet in todo.items():
             svg_path = os.path.join(src, f"clawd-{pet}.svg")
             svg = open(svg_path).read()
             if os.path.abspath(src) != os.path.abspath(SRC_VENDOR):
@@ -81,7 +96,7 @@ document.querySelectorAll('.c').forEach(c => {{
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             manifest["states"][state] = {"file": f"{name}.png", "pet": pet, "frames": n}
             print(f"  {state:28} <- clawd-{pet}.svg  ({os.path.getsize(out_png)//1024} KB)")
-    json.dump(manifest, open(os.path.join(OUT, "manifest.json"), "w"), indent=2)
+    json.dump(manifest, open(manifest_path, "w"), indent=2)
     print("wrote manifest.json")
 
 if __name__ == "__main__":
