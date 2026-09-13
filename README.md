@@ -16,6 +16,10 @@
   <img alt="Unofficial" src="https://img.shields.io/badge/unofficial-not%20affiliated%20with%20Anthropic-lightgrey.svg">
 </p>
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Two Clawdy crabs on the desktop: a terracotta one holding a tool, a green one with a badge, each under its chat's name tag">
+</p>
+
 ## The poses
 
 Every live session — Claude Code, the Desktop Code tab, Cowork — gets a pet in the
