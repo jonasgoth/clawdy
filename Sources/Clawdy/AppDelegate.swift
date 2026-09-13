@@ -11,11 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var menu: NSMenu!
     private let crabCountItem = NSMenuItem(title: "No sessions yet", action: nil, keyEquivalent: "")
-    private let toggleItem = NSMenuItem(title: "Hide playpen", action: #selector(togglePlaypen), keyEquivalent: "")
-    private let hooksItem = NSMenuItem(title: "Turn on instant updates…", action: #selector(toggleHooks), keyEquivalent: "")
-    private let axItem = NSMenuItem(title: "Allow window checks…", action: #selector(requestAccessibility), keyEquivalent: "")
-    private let soundItem = NSMenuItem(title: "Sounds", action: #selector(toggleSounds), keyEquivalent: "")
-    private var sessionSeparatorTop: NSMenuItem!
+    /// Every setting lives in one menu item: a two-column grid of tappable boxes.
+    private let gridItem = NSMenuItem()
+    private let gridView = MenuGridView()
 
     /// Rows for busy sessions: their Claude asterisk is redrawn on a timer while the menu is open.
     private var spinningRows: [NSMenuItem] = []
@@ -42,27 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(title)
         crabCountItem.isEnabled = false
         menu.addItem(crabCountItem)
-        sessionSeparatorTop = NSMenuItem.separator()
-        menu.addItem(sessionSeparatorTop)
-
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-        let reset = NSMenuItem(title: "Tidy crabs", action: #selector(resetCrabs), keyEquivalent: "")
-        reset.target = self
-        menu.addItem(reset)
-        hooksItem.target = self
-        menu.addItem(hooksItem)
-        axItem.target = self
-        menu.addItem(axItem)
-        soundItem.target = self
-        menu.addItem(soundItem)
-        // macOS gives Quit its own icon, so the other actions get one too and the column lines up.
-        reset.image = Self.actionIcon("sparkles")
-        hooksItem.image = Self.actionIcon("bolt")
-        axItem.image = Self.actionIcon("macwindow")
-        soundItem.image = Self.actionIcon("speaker.wave.2")
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Clawdy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        gridItem.view = gridView
+        menu.addItem(gridItem)
+        let quit = NSMenuItem(title: "Quit Clawdy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.image = Self.actionIcon("xmark.circle")
+        menu.addItem(quit)
         statusItem.menu = menu
 
         store.onUpdate = { [weak self] in self?.updateStatusItem() }
@@ -84,9 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.imagePosition = .imageLeading
     }
 
-    @objc private func toggleSounds() {
+    private func toggleSounds() {
         SoundPlayer.enabled.toggle()
-        soundItem.state = SoundPlayer.enabled ? .on : .off
+        refreshGrid()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -133,11 +115,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return image
     }
 
-    @objc private func togglePlaypen() {
+    private func togglePlaypen() {
         if playpen.isVisible { playpen.hide() } else { playpen.show() }
+        refreshGrid()
     }
 
-    @objc private func resetCrabs() { playpen.scene.resetCrabs() }
+    private func resetCrabs() { playpen.scene.resetCrabs() }
 
     /// Session rows are a readout, not a button — but they need an action to avoid being greyed out.
     @objc private func noop() {}
@@ -149,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if SessionOpener.open(request.target) { store.markOpened(request.sessionId) }
     }
 
-    @objc private func toggleHooks() {
+    private func toggleHooks() {
         if HookInstaller.isInstalled {
             switch HookInstaller.uninstall() {
             case .success: notify("Instant updates off", "Clawdy's hooks were removed from your Claude settings.")
@@ -168,11 +151,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .failure(let e): notify("Could not install hooks", e.localizedDescription)
             }
         }
+        refreshGrid()
     }
 
     /// Asks macOS for Accessibility permission so Clawdy can read which Claude window is in front
     /// (used to clear Cowork "done" badges precisely). Only ever runs when you click this.
-    @objc private func requestAccessibility() {
+    private func requestAccessibility() {
         SeenDetector.requestAccessibility()
     }
 
@@ -190,22 +174,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         crabCountItem.title = rows.isEmpty
             ? "No sessions running"
             : "\(rows.count) session\(rows.count == 1 ? "" : "s") running"
-        toggleItem.title = playpen.isVisible ? "Hide playpen" : "Show playpen"
-        toggleItem.image = Self.actionIcon(playpen.isVisible ? "eye.slash" : "eye")
-        hooksItem.title = HookInstaller.isInstalled ? "Turn off instant updates" : "Turn on instant updates…"
-        soundItem.state = SoundPlayer.enabled ? .on : .off
-        let trusted = AXIsProcessTrusted()
-        axItem.title = trusted ? "Window checks: on" : "Allow window checks…"
-        axItem.isEnabled = !trusted
+        refreshGrid()
 
-        // Drop the old session rows: everything between the count line and the separator.
+        // Drop the old session rows: everything between the count line and the grid.
         // The index has to be re-read each pass, or the loop walks off the end and eats the
-        // separator plus the actions below it (that is why the menu sometimes came up bare).
+        // grid plus the actions below it (that is why the menu sometimes came up bare).
         let firstRow = menu.index(of: crabCountItem) + 1
-        while firstRow < menu.numberOfItems, menu.item(at: firstRow) !== sessionSeparatorTop {
+        while firstRow < menu.numberOfItems, menu.item(at: firstRow) !== gridItem {
             menu.removeItem(at: firstRow)
         }
-        var insertAt = menu.index(of: sessionSeparatorTop)
+        var insertAt = menu.index(of: gridItem)
         spinningRows = []
         for row in rows {
             let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
@@ -227,4 +205,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// Rebuilds the settings boxes. Anything still waiting on your permission goes in a
+    /// full-width box on top and disappears once it is granted; the everyday switches sit
+    /// below in two columns, tinted green while they are on.
+    private func refreshGrid() {
+        let on = NSColor.systemGreen
+        let ask = NSColor.systemBlue
+
+        var wide: [MenuCard.Model] = []
+        if !AXIsProcessTrusted() {
+            wide.append(MenuCard.Model(
+                title: "Window checks",
+                status: "Allow in System Settings",
+                symbol: "macwindow.badge.plus",
+                tint: ask,
+                closesMenu: true,
+                action: { [weak self] in self?.requestAccessibility() }))
+        }
+
+        let shown = playpen.isVisible
+        let hooks = HookInstaller.isInstalled
+        let sound = SoundPlayer.enabled
+        let grid: [MenuCard.Model] = [
+            MenuCard.Model(title: "Crab visibility",
+                           status: shown ? "Shown" : "Hidden",
+                           symbol: shown ? "eye.fill" : "eye.slash.fill",
+                           tint: shown ? on : nil,
+                           action: { [weak self] in self?.togglePlaypen() }),
+            MenuCard.Model(title: "Sounds",
+                           status: sound ? "On" : "Off",
+                           symbol: sound ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                           tint: sound ? on : nil,
+                           action: { [weak self] in self?.toggleSounds() }),
+            MenuCard.Model(title: "Instant updates",
+                           status: hooks ? "On" : "Off",
+                           symbol: hooks ? "bolt.fill" : "bolt.slash.fill",
+                           tint: hooks ? on : nil,
+                           action: { [weak self] in self?.toggleHooks() }),
+            MenuCard.Model(title: "Crab positions",
+                           status: "Tidy up",
+                           symbol: "sparkles",
+                           tint: ask,
+                           closesMenu: true,
+                           action: { [weak self] in self?.resetCrabs() }),
+        ]
+        gridView.setCards(wide: wide, grid: grid)
+        gridItem.view = gridView
+    }
 }

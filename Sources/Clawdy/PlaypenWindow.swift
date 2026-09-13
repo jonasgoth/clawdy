@@ -45,10 +45,20 @@ final class PlaypenController {
         skView.ignoresSiblingOrder = true
         skView.preferredFramesPerSecond = 30
         skView.autoresizingMask = [.width, .height]
+        // When the panel grows to full height (a crab being carried) the Metal layer would show its
+        // last frame stretched over the new size for an instant — every pet balloons. Pinning the
+        // old picture to the bottom-left instead keeps the pets exactly where they were.
+        skView.wantsLayer = true
+        skView.layer?.contentsGravity = .bottomLeft
 
         scene = PlaypenScene(size: frame.size)
         skView.presentScene(scene)
         panel.contentView = skView
+        scene.onNeedsTallWindow = { [weak self] tall in
+            guard let self, self.isTall != tall else { return }
+            self.isTall = tall
+            self.panel.setFrame(Self.stripFrame(tall: tall), display: true)
+        }
 
         // Global = events going to other apps (cursor over empty strip or elsewhere).
         // Local = events going to us (cursor over a crab, or mid-drag). Need both.
@@ -69,11 +79,17 @@ final class PlaypenController {
 
     /// Full width along the very bottom of the main screen — the same row as the Dock. The Dock
     /// draws above us, and the scene keeps the pets out of its footprint (see updateDockZone).
-    static func stripFrame() -> NSRect {
+    static func stripFrame(tall: Bool = false) -> NSRect {
         let screen = NSScreen.main ?? NSScreen.screens[0]
         let frame = screen.frame
-        return NSRect(x: frame.minX, y: frame.minY, width: frame.width, height: stripHeight)
+        return NSRect(x: frame.minX, y: frame.minY, width: frame.width,
+                      height: tall ? frame.height : stripHeight)
     }
+
+    /// While a crab is carried (and until it and any towed babies land) the panel covers the
+    /// whole screen, so it can be lifted right to the top. It stays see-through and click-through
+    /// everywhere except on a crab, so nothing behind it notices.
+    private var isTall = false
 
     /// Extra room kept between the pets and the Dock's edge.
     static let dockMargin: CGFloat = 18
@@ -115,7 +131,7 @@ final class PlaypenController {
     }
 
     func reposition() {
-        panel.setFrame(Self.stripFrame(), display: true)
+        panel.setFrame(Self.stripFrame(tall: isTall), display: true)
         updateDockZone()
     }
 

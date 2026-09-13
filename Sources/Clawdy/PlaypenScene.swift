@@ -140,6 +140,10 @@ final class PlaypenScene: SKScene {
 
     /// Called with a session id right after a click on its crab actually opened that chat.
     var onOpened: ((String) -> Void)?
+    /// Fires with `true` the moment a crab is picked up (the window grows to the whole screen so
+    /// it can be carried right to the top) and `false` once everyone is back on the floor.
+    var onNeedsTallWindow: ((Bool) -> Void)?
+    private var needsTallWindow = false
 
     private(set) var crabs: [CrabNode] = []
     private var byId: [String: CrabNode] = [:]
@@ -369,6 +373,17 @@ final class PlaypenScene: SKScene {
         layoutTags()
         hoverCheck()
         adaptFrameRate()
+        settleTallWindow()
+    }
+
+    /// Ask for the full-height window while a crab is in the air; hand the extra room back the
+    /// moment nothing is being carried, dropped or towed any more.
+    private func settleTallWindow() {
+        guard needsTallWindow, !isDragging, towLeader == nil else { return }
+        let airborne = crabs.contains { $0.position.y > floorY + 1 || $0.action(forKey: "settle") != nil }
+        guard !airborne else { return }
+        needsTallWindow = false
+        onNeedsTallWindow?(false)
     }
 
     /// Left is the working side, right is the done side. Anyone standing on the wrong side runs
@@ -847,6 +862,10 @@ final class PlaypenScene: SKScene {
             // (it may have kept walking while you held the button down).
             didDrag = true
             dragOffset = CGPoint(x: crab.position.x - p.x, y: crab.position.y - p.y)
+            if !needsTallWindow {
+                needsTallWindow = true
+                onNeedsTallWindow?(true)
+            }
             crab.removeAction(forKey: "settle")
             crab.showDragging()
             beginTow(for: crab)
@@ -879,8 +898,9 @@ final class PlaypenScene: SKScene {
         // However you let go, the crab drops straight down — never a sideways fly-off.
         let dropX = crab.position.x
         let height = max(crab.position.y - floorY, 0)
+        // Free-fall timing: t = sqrt(2h / g), so a drop from the top of the screen takes about a second.
         let fall = SKAction.move(to: CGPoint(x: dropX, y: floorY),
-                                 duration: TimeInterval(min(0.45, 0.1 + height / 1400)))
+                                 duration: TimeInterval(max(0.1, sqrt(2 * height / Self.towGravity))))
         fall.timingMode = .easeIn
 
         // Landed on the Dock or off the edge? Once it touches down it walks back to a spot it may

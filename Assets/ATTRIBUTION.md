@@ -4,8 +4,11 @@
 `Assets/pets/src/*.svg` are animated SVGs from
 [abderrahimghazali/clawd-pet](https://github.com/abderrahimghazali/clawd-pet) (MIT, © 2026 Abderrahim Ghazali),
 also browsable at https://clawd-pet.vercel.app. `tools/render-pets.py` bakes them into the frame
-sheets in `Assets/pets/*.png` (headless Chrome + the Web Animations API). The app icon is the
-"happy" pet on a rounded square.
+sheets in `Assets/pets/*.png` (headless Chrome + the Web Animations API).
+
+The app icon (`Assets/AppIcon.*`) and the installer backdrop (`Assets/dmg/*`) are not upstream
+art: they were drawn for Clawdy by `tools/make-icon.py` and `tools/make-dmg-background.py`, in
+clawd-pet's palette so they match the pets. Same MIT terms as the rest.
 
 State → pet: working = coding · moving = crab-walking · tool = working-tool-calling ·
 permission = praying · question = asking* · done = celebrating · done & seen = idle-living ·

@@ -39,9 +39,11 @@ Nothing leaves your Mac. Clawdy only reads files Claude already writes.
 
 ### Download
 
-Grab the latest `Clawdy-<version>.dmg` from [Releases](https://github.com/jonasgoth/clawdy/releases), drag Clawdy to Applications, and open it.
+Grab the latest `Clawdy-<version>.dmg` from [Releases](https://github.com/jonasgoth/clawdy/releases) and open it. The disk image opens as a window: drag the crab onto Applications.
 
-The build is ad-hoc signed, not notarized. The first time, right-click the app and choose **Open**.
+![The Clawdy installer window: drag the crab into Applications](docs/install.png)
+
+The build is ad-hoc signed, not notarized. The first time, right-click Clawdy in Applications and choose **Open**.
 
 ### Build from source
 
@@ -58,6 +60,8 @@ This builds `build/Clawdy.app` and launches it. To make your own installer:
 ```bash
 tools/make-dmg.sh
 ```
+
+That writes `build/Clawdy-<version>.dmg` with the drag-to-Applications layout. It asks macOS for permission to control Finder the first time, since Finder is what arranges the window; without it you still get a working DMG, just a plain file list.
 
 ## Menu
 
@@ -90,6 +94,17 @@ tools/render-pets.py
 ```
 
 This writes `Assets/pets/<state>.png` and `Assets/pets/manifest.json`.
+
+## Redrawing the icon
+
+The app icon and the installer backdrop are drawn by scripts, not by hand:
+
+```bash
+tools/make-icon.py             # Assets/AppIcon.svg + .png + .icns
+tools/make-dmg-background.py   # Assets/dmg/background.tiff
+```
+
+`tools/make-icon.py --theme dark` swaps the cream plate for a dark one. Both need Google Chrome, which turns the SVG into a PNG.
 
 ## Contributing
 

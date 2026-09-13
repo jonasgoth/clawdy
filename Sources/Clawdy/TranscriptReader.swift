@@ -22,11 +22,28 @@ final class TranscriptReader {
     private(set) var permissionModeIsAuto = false  // "auto"/"bypassPermissions"/"acceptEdits"
     private(set) var turnStartedAt: Double = 0     // epoch seconds of the prompt that began the current turn
 
+    /// A shell started with `run_in_background`: where its output goes, and when it started.
+    struct BackgroundShell { let outputPath: String; let startedAt: Double }
+    /// Background shells by id, added when Bash hands one back and removed when its
+    /// task-notification lands. Claude ends the turn and waits for that notification, so these
+    /// hold the turn open the same way a sub-agent does.
+    private(set) var backgroundShells: [String: BackgroundShell] = [:]
+
     /// Directory holding this session's sub-agent transcripts, once the main file is located.
     var subagentsDirectory: String? {
         guard let path else { return nil }
         let dir = (path as NSString).deletingLastPathComponent
         return "\(dir)/\(sessionId)/subagents"
+    }
+
+    /// Background shells that still look alive. One whose output file has been silent too long is
+    /// given up on: a killed job never gets its notification, and a server started this way would
+    /// otherwise hold the crab at "working" for the rest of the day.
+    func activeBackgroundShells(now: Double, staleAfter: TimeInterval = 10 * 60) -> [String] {
+        backgroundShells.compactMap { id, shell in
+            let last = FileStat.mtime(shell.outputPath) ?? shell.startedAt
+            return now - last <= staleAfter ? id : nil
+        }
     }
 
     init(sessionId: String) { self.sessionId = sessionId }
@@ -73,6 +90,10 @@ final class TranscriptReader {
             recordTime = epoch
             lastEventTime = max(lastEventTime, epoch)
         }
+
+        // Bash's background jobs live outside the turn: the tool result hands back an id, and the
+        // session only hears about the job again through a task-notification.
+        if type == "user" || type == "queue-operation" { noteBackgroundShells(line) }
 
         switch type {
         case "custom-title":
@@ -140,6 +161,29 @@ final class TranscriptReader {
             break
         }
     }
+
+    private func noteBackgroundShells(_ line: String) {
+        if line.contains("<task-id>") {
+            let range = NSRange(line.startIndex..., in: line)
+            for m in Self.taskIdPattern.matches(in: line, range: range) {
+                if let r = Range(m.range(at: 1), in: line) { backgroundShells[String(line[r])] = nil }
+            }
+        }
+        guard line.contains("Command running in background with ID:") else { return }
+        let range = NSRange(line.startIndex..., in: line)
+        for m in Self.backgroundStartPattern.matches(in: line, range: range) {
+            guard let idRange = Range(m.range(at: 1), in: line),
+                  let pathRange = Range(m.range(at: 2), in: line) else { continue }
+            backgroundShells[String(line[idRange])] = BackgroundShell(outputPath: String(line[pathRange]),
+                                                                     startedAt: lastEventTime)
+        }
+    }
+
+    /// "Command running in background with ID: b8zb4io6g. Output is being written to: /…/b8zb4io6g.output."
+    private static let backgroundStartPattern = try! NSRegularExpression(
+        pattern: "Command running in background with ID: ([A-Za-z0-9_-]+)\\. Output is being written to: (\\S+\\.output)")
+    /// The id inside a <task-notification>, which is how a background job says it is done.
+    private static let taskIdPattern = try! NSRegularExpression(pattern: "<task-id>([A-Za-z0-9_-]+)</task-id>")
 
     private func setPermissionMode(_ mode: String) {
         permissionModeIsAuto = ["auto", "bypassPermissions", "acceptEdits", "plan"].contains(mode)

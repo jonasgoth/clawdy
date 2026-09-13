@@ -141,7 +141,18 @@ final class SessionStore {
 
             let reader = reader(for: session.sessionId)
             reader.refresh()
-            var status = resolve(reader: reader, hook: hooks[session.sessionId], now: now)
+            // Nothing written yet: this chat has not started. Clicking "New" (or switching folders
+            // in a new chat) spins up a process that lives under a second and never writes a line.
+            // Without this it earns a crab that pops in and walks straight back off again.
+            if reader.lastEventTime == 0 { continue }
+            // Background sub-agents still running: the turn is not really over, whatever the
+            // transcript says (see resolve).
+            let runningAgents = reader.subagentsDirectory.map { SubagentWatcher.activeAgents(in: $0, now: now) } ?? []
+            // Bash's background jobs park the turn the same way, and are not sub-agents: no crab
+            // of their own, but the session is not finished while one is still going.
+            let runningJobs = reader.activeBackgroundShells(now: now)
+            var status = resolve(reader: reader, hook: hooks[session.sessionId],
+                                 helpersRunning: !runningAgents.isEmpty || !runningJobs.isEmpty, now: now)
 
             if status.isUnseenFinish {
                 // When it stopped needing to run: the end of the turn, or the question tool it is
@@ -205,11 +216,11 @@ final class SessionStore {
                 continue
             }
             snapshot.crabs.append(CrabSnapshot(id: session.sessionId, title: chatTitle ?? "", hue: hue, status: status,
-                                               detail: detail(for: session, reader: reader, status: status), open: open))
+                                               detail: detail(for: session, reader: reader, status: status, jobs: runningJobs.count), open: open))
             newRows.append(Row(id: session.sessionId, title: title, status: status, lastActivity: activity, open: open))
 
-            if status.isBusy, let dir = reader.subagentsDirectory {
-                for agentId in SubagentWatcher.activeAgents(in: dir, now: now) {
+            if status.isBusy {
+                for agentId in runningAgents {
                     snapshot.babies.append(BabySnapshot(id: agentId, parentId: session.sessionId, hue: hue))
                 }
             }
@@ -284,8 +295,9 @@ final class SessionStore {
 
     /// What the hover bubble says: the project, where it runs, the tool in hand, and when the
     /// current state began (the turn started, the tool asked for approval, or the turn ended).
-    private func detail(for session: LiveSession, reader: TranscriptReader, status: CrabStatus) -> CrabDetail {
+    private func detail(for session: LiveSession, reader: TranscriptReader, status: CrabStatus, jobs: Int) -> CrabDetail {
         var d = CrabDetail()
+        d.jobs = jobs
         d.project = session.projectName
         d.source = session.entrypoint == "cli" ? "Terminal" : "Claude app"
         d.autoMode = reader.permissionModeIsAuto
@@ -313,7 +325,7 @@ final class SessionStore {
     // MARK: - Status
 
     /// Turn transcript + hook signals into one status, using the plan's priority order.
-    private func resolve(reader: TranscriptReader, hook: HookBridge.Event?, now: Double) -> CrabStatus {
+    private func resolve(reader: TranscriptReader, hook: HookBridge.Event?, helpersRunning: Bool, now: Double) -> CrabStatus {
         // Hooks are ground truth when present and at least as fresh as the transcript.
         let hookState = hook.flatMap { $0.ts + 1 >= reader.lastEventTime ? $0.state : nil }
 
@@ -339,6 +351,10 @@ final class SessionStore {
         if reader.idle {
             if reader.endedWithQuestion { return .needsQuestion }
             if reader.errored { return .error }
+            // "Waiting on four builders…" then end_turn: Claude parks while background sub-agents
+            // and shell jobs run, and wakes for each one's task-notification. Without this the crab
+            // flips done / working / done every time one reports in, trotting across the Dock each way.
+            if helpersRunning { return .working }
             if age > Self.dormantAfter { return .dormant }
             return .doneUnseen
         }

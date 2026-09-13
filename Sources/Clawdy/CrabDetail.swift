@@ -15,6 +15,9 @@ struct CrabDetail: Equatable {
     var since: Double = 0
     /// Auto / accept-edits / bypass permission mode: it will not stop to ask.
     var autoMode = false
+    /// Background shell jobs still running. They hold the turn open but get no crab of their own,
+    /// so the bubble is the only place you can see them.
+    var jobs = 0
 
     /// The bubble's lines, top to bottom. Empty lines are left out.
     func lines(status: CrabStatus, helpers: Int, now: Double) -> [String] {
@@ -23,6 +26,7 @@ struct CrabDetail: Equatable {
         if !source.isEmpty { place.append(source) }
         if autoMode { place.append("auto") }
         if helpers > 0 { place.append(helpers == 1 ? "1 helper" : "\(helpers) helpers") }
+        if jobs > 0 { place.append(jobs == 1 ? "1 job" : "\(jobs) jobs") }
         return [headline(status: status), timing(status: status, now: now), place.joined(separator: " · ")]
             .filter { !$0.isEmpty }
     }
