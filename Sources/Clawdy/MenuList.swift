@@ -1,5 +1,15 @@
 import AppKit
 
+/// One place for the menu's side padding. The rows sit `sideInset` in from the menu's
+/// own edge, and their icons and switches sit `rowInset` further in again, so the
+/// header, the rows and the dividers all line up on the same two numbers.
+enum MenuMetrics {
+    static let sideInset: CGFloat = 5
+    static let rowInset: CGFloat = 7
+    /// Where the icons, titles and switches actually start.
+    static var contentInset: CGFloat { sideInset + rowInset }
+}
+
 /// A switch drawn by hand. AppKit's own NSSwitch dims itself inside a menu — a menu's
 /// window never becomes the key window, so the control believes it is sitting in a
 /// background window and greys out — which made every "on" row look off.
@@ -74,9 +84,10 @@ final class MenuHeaderView: NSView {
         super.layout()
         // Left edge lines up with the row icons, right edge with their switches.
         let midY = bounds.height / 2
-        nameLabel.frame = NSRect(x: 20, y: midY - 8, width: width(of: nameLabel), height: 17)
+        let inset = MenuMetrics.contentInset
+        nameLabel.frame = NSRect(x: inset, y: midY - 8, width: width(of: nameLabel), height: 17)
         let versionWidth = width(of: versionLabel)
-        versionLabel.frame = NSRect(x: bounds.width - 20 - versionWidth, y: midY - 8,
+        versionLabel.frame = NSRect(x: bounds.width - inset - versionWidth, y: midY - 8,
                                     width: versionWidth, height: 17)
     }
 }
@@ -188,7 +199,7 @@ final class MenuRow: NSView {
 
     override func layout() {
         super.layout()
-        let pad: CGFloat = 10
+        let pad = MenuMetrics.rowInset
         let side: CGFloat = 15
         icon.frame = NSRect(x: pad, y: (bounds.height - side) / 2, width: side, height: side)
 
@@ -252,7 +263,7 @@ final class MenuRow: NSView {
 /// The block of settings at the bottom of the menu: one row per setting, stacked.
 final class MenuListView: NSView {
     private static let gap: CGFloat = 2
-    private static let sideInset: CGFloat = 10
+    private static let sideInset = MenuMetrics.sideInset
     private static let topInset: CGFloat = 2
     private static let bottomInset: CGFloat = 2
 
@@ -295,7 +306,7 @@ final class MenuListView: NSView {
 /// empty space above and below its line; this one keeps just enough to breathe.
 final class MenuDividerView: NSView {
     static let height: CGFloat = 9
-    private static let sideInset: CGFloat = 10
+    private static let sideInset = MenuMetrics.contentInset
 
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 288, height: Self.height))
