@@ -7,10 +7,27 @@
     "working:working-thinking",
     "working:working-juggling",
     "working:working-debugger",
-    "working:working-tool-calling",
-    "working:dj",
     "working:working-firefighting",
-    "working:magic"
+    "working:working-conducting",
+    "working:working-typing",
+    "working:magic",
+    "working:hopeful",
+    "working:evil",
+    "working:hallucinating",
+    "working:astronaut",
+    "working:detective",
+    "working:coding",
+    "working:crafting",
+    "working:flying",
+    "working:gardening",
+    "working:loading",
+    "working:idea",
+    "working:money",
+    "working:rocket",
+    "working:skateboard",
+    "working:security",
+    "working:star",
+    "working:time-travel"
   ],
   "states": {
     "moving": {
@@ -68,16 +85,6 @@
       "pet": "working-debugger",
       "frames": 120
     },
-    "working:working-tool-calling": {
-      "file": "working-working-tool-calling.png",
-      "pet": "working-tool-calling",
-      "frames": 120
-    },
-    "working:dj": {
-      "file": "working-dj.png",
-      "pet": "dj",
-      "frames": 120
-    },
     "working:working-firefighting": {
       "file": "working-working-firefighting.png",
       "pet": "working-firefighting",
@@ -86,6 +93,106 @@
     "working:magic": {
       "file": "working-magic.png",
       "pet": "magic",
+      "frames": 120
+    },
+    "working:working-conducting": {
+      "file": "working-working-conducting.png",
+      "pet": "working-conducting",
+      "frames": 120
+    },
+    "working:working-typing": {
+      "file": "working-working-typing.png",
+      "pet": "working-typing",
+      "frames": 120
+    },
+    "working:hopeful": {
+      "file": "working-hopeful.png",
+      "pet": "hopeful",
+      "frames": 120
+    },
+    "working:evil": {
+      "file": "working-evil.png",
+      "pet": "evil",
+      "frames": 120
+    },
+    "working:hallucinating": {
+      "file": "working-hallucinating.png",
+      "pet": "hallucinating",
+      "frames": 120
+    },
+    "working:astronaut": {
+      "file": "working-astronaut.png",
+      "pet": "astronaut",
+      "frames": 120,
+      "lift": 6
+    },
+    "working:detective": {
+      "file": "working-detective.png",
+      "pet": "detective",
+      "frames": 120
+    },
+    "working:coding": {
+      "file": "working-coding.png",
+      "pet": "coding",
+      "frames": 120
+    },
+    "working:crafting": {
+      "file": "working-crafting.png",
+      "pet": "crafting",
+      "frames": 120
+    },
+    "working:flying": {
+      "file": "working-flying.png",
+      "pet": "flying",
+      "frames": 120,
+      "lift": 6,
+      "sway": 4
+    },
+    "working:gardening": {
+      "file": "working-gardening.png",
+      "pet": "gardening",
+      "frames": 120
+    },
+    "working:loading": {
+      "file": "working-loading.png",
+      "pet": "loading",
+      "frames": 120
+    },
+    "working:idea": {
+      "file": "working-idea.png",
+      "pet": "idea",
+      "frames": 120
+    },
+    "working:money": {
+      "file": "working-money.png",
+      "pet": "money",
+      "frames": 120
+    },
+    "working:rocket": {
+      "file": "working-rocket.png",
+      "pet": "rocket",
+      "frames": 120,
+      "lift": 6,
+      "sway": 4
+    },
+    "working:skateboard": {
+      "file": "working-skateboard.png",
+      "pet": "skateboard",
+      "frames": 120
+    },
+    "working:security": {
+      "file": "working-security.png",
+      "pet": "security",
+      "frames": 120
+    },
+    "working:star": {
+      "file": "working-star.png",
+      "pet": "star",
+      "frames": 120
+    },
+    "working:time-travel": {
+      "file": "working-time-travel.png",
+      "pet": "time-travel",
       "frames": 120
     }
   }

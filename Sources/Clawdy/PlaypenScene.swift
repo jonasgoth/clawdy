@@ -320,6 +320,8 @@ final class PlaypenScene: SKScene {
         if dragged === crab { dragged = nil }
         if hovered === crab { setHovered(nil, at: nil) }
         for (babyId, parent) in babyParent where parent == id { removeBaby(id: babyId) }
+        // Hand this crab's working animation back, so the next arrival can take it.
+        PetLibrary.releaseWorkingKey(for: id)
         walkOff(crab, id: id)
     }
 

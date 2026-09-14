@@ -36,13 +36,39 @@ WORKING_PETS = [
     "working-thinking",
     "working-juggling",
     "working-debugger",
-    "working-tool-calling",
-    "dj",
     "working-firefighting",
+    "working-conducting",
+    "working-typing",
     "magic",
+    "hopeful",
+    "evil",
+    "hallucinating",
+    "astronaut",
+    "detective",
+    "coding",
+    "crafting",
+    "flying",
+    "gardening",
+    "loading",
+    "idea",
+    "money",
+    "rocket",
+    "skateboard",
+    "security",
+    "star",
+    "time-travel",
 ]
 for _p in WORKING_PETS:
     STATES[f"working:{_p}"] = _p
+
+# Pets that are off the ground in their own art. "lift" floats them this many points above the
+# floor every other crab stands on; "sway" drifts them that far to each side. The app also drops
+# their baked ground shadow, so nothing dark slides along underneath a hovering crab.
+HOVER = {
+    "astronaut": {"lift": 6},
+    "flying": {"lift": 6, "sway": 4},
+    "rocket": {"lift": 6, "sway": 4},
+}
 CELL = 240          # px per frame (rendered 2x; shown at 120 pt)
 COLS, ROWS = 12, 10 # 120 frames -> 30 fps, which divides evenly into a 60 Hz display
 LOOP_MS = 4000      # animation loop we sample
@@ -94,8 +120,16 @@ document.querySelectorAll('.c').forEach(c => {{
                             f"--window-size={CELL*COLS},{CELL*ROWS}", "--virtual-time-budget=600",
                             f"--screenshot={out_png}", f"file://{page}"],
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            manifest["states"][state] = {"file": f"{name}.png", "pet": pet, "frames": n}
+            entry = {"file": f"{name}.png", "pet": pet, "frames": n}
+            entry.update(HOVER.get(pet, {}))
+            manifest["states"][state] = entry
             print(f"  {state:28} <- clawd-{pet}.svg  ({os.path.getsize(out_png)//1024} KB)")
+    for stale in [k for k in manifest["states"] if k not in STATES]:
+        gone = manifest["states"].pop(stale)
+        path = os.path.join(OUT, gone["file"])
+        if os.path.exists(path):
+            os.remove(path)
+        print(f"  dropped {stale} ({gone['file']})")
     json.dump(manifest, open(manifest_path, "w"), indent=2)
     print("wrote manifest.json")
 

@@ -5,7 +5,7 @@ import SpriteKit
 /// wears the same shell, and only the shell moves — props, eyes and highlights stay as drawn.
 ///
 /// Colours are handed out in the order you start working. The first folder you open wears the pets'
-/// own terracotta, the next blue, the next green, and so on down `projectHues`. Nothing is tied to a
+/// own terracotta, the next indigo, the next blue, and so on down `projectHues`. Nothing is tied to a
 /// folder forever: once Claude has been quiet for `idleReset` the slate is wiped, so the next folder
 /// to turn up starts again at terracotta. Which project is orange therefore depends on where you
 /// started working, not on a calendar date — no midnight switch, and a day spent in one project
@@ -17,10 +17,11 @@ enum CrabPalette {
     /// The hue the artwork is already drawn at, so nothing gets rotated.
     static let standardHueDegrees: CGFloat = PetLibrary.baseHueDegrees
 
-    /// Shell hues, in the order folders claim them. Terracotta first, so the folder you start in
-    /// looks exactly as the art was drawn. The rest are spread around the wheel so two projects on
-    /// screen never read as the same colour; past nine folders in one stretch it wraps and repeats.
-    static let projectHues: [CGFloat] = [standardHueDegrees, 205, 128, 280, 45, 170, 325, 95, 245]
+    /// Shell hues, in the order folders claim them: terracotta, indigo, blue, pink, green, purple,
+    /// lime, teal. Terracotta first, so the folder you start in looks exactly as the art was drawn,
+    /// and each next hue jumps far around the wheel so two projects on screen never read as the same
+    /// colour; past eight folders in one stretch it wraps and repeats.
+    static let projectHues: [CGFloat] = [standardHueDegrees, 245, 205, 325, 128, 280, 95, 170]
 
     /// Quiet for this long and the next crab starts the colours over from terracotta.
     static let idleReset: TimeInterval = 4 * 3600
@@ -111,15 +112,38 @@ final class CrabNode: SKNode {
     /// The pet sheet on screen right now, so `applyFacing` knows which pose it is mirroring.
     private var currentPetKey: String?
 
-    /// True while the crab is held in the air: it plays frames cropped just above the ground
-    /// shadow baked into the art, so no dark bar floats along underneath it.
-    private var shadowCropped = false {
-        didSet {
-            guard usesPet, shadowCropped != oldValue else { return }
-            sprite.size = CGSize(width: Self.petSize,
-                                 height: Self.petSize * (shadowCropped ? 1 - PetLibrary.shadowBand : 1))
-            sprite.anchorPoint = CGPoint(x: 0.5, y: shadowCropped ? Self.petCropAnchorY : Self.petAnchorY)
-        }
+    /// True while the crab is held in the air by the cursor.
+    private var carried = false { didSet { if carried != oldValue { applyShadowCrop() } } }
+
+    /// How far the pose on screen hovers above the floor, and how far it drifts to each side.
+    /// Zero for every pet that stands on the ground; the flying ones come out of the manifest.
+    private var petLift: CGFloat = 0
+    private var petSway: CGFloat = 0
+
+    /// A pet off the floor — carried by the cursor, or flying under its own steam — plays frames
+    /// cropped just above the ground shadow baked into the art, so no dark bar floats underneath.
+    private var shadowCropped = false
+    private var wantsShadowCrop: Bool { usesPet && (carried || petLift > 0) }
+
+    private func applyShadowCrop() {
+        guard shadowCropped != wantsShadowCrop else { return }
+        shadowCropped = wantsShadowCrop
+        sprite.size = CGSize(width: Self.petSize,
+                             height: Self.petSize * (shadowCropped ? 1 - PetLibrary.shadowBand : 1))
+        sprite.anchorPoint = CGPoint(x: 0.5, y: shadowCropped ? Self.petCropAnchorY : Self.petAnchorY)
+    }
+
+    /// Park the sprite at its hover height and start (or stop) the lazy side-to-side drift that
+    /// goes with it. Called on every pose change, so a crab that stops flying settles back down.
+    private func applyHover() {
+        sprite.removeAction(forKey: "hover")
+        sprite.position = CGPoint(x: 0, y: petLift)
+        guard petSway > 0 else { return }
+        let out = SKAction.moveBy(x: petSway, y: 0, duration: 1.3)
+        let across = SKAction.moveBy(x: -petSway * 2, y: 0, duration: 2.6)
+        let home = SKAction.moveBy(x: petSway, y: 0, duration: 1.3)
+        for step in [out, across, home] { step.timingMode = .easeInEaseOut }
+        sprite.run(.repeatForever(.sequence([out, across, home])), withKey: "hover")
     }
 
     private var status: CrabStatus = .working
@@ -134,8 +158,10 @@ final class CrabNode: SKNode {
     /// This crab's project shell hue, in degrees. See `CrabPalette`.
     var projectHue: CGFloat = CrabPalette.standardHueDegrees { didSet { if projectHue != oldValue { applyColor() } } }
 
-    /// Unflipped, the art walks *left*: the planted leg sweeps toward +x, which shoves the body
-    /// the other way. So facing right is the mirrored sprite, not the plain one.
+    /// Unflipped, the pet art walks *left*: the planted leg sweeps toward +x, which shoves the
+    /// body the other way. So for pets, facing right is the mirrored sprite, not the plain one.
+    /// The pixel crab (babies, and the fallback) is drawn the other way round — unflipped it
+    /// walks right — so it mirrors on the opposite sign. See `applyFacing`.
     var facingRight = true { didSet { if facingRight != oldValue { applyFacing() } } }
 
     /// Poses whose art carries a prop that reads wrong back-to-front — the "200" crab holds a
@@ -144,7 +170,9 @@ final class CrabNode: SKNode {
     private var canMirror: Bool { !Self.unmirroredPets.contains(currentPetKey ?? "") }
 
     private func applyFacing() {
-        sprite.xScale = (facingRight && canMirror ? -1 : 1) * abs(sprite.xScale)
+        // `usesPet` decides which way "unflipped" points, so each art set walks the way it moves.
+        let mirrored = usesPet ? (facingRight && canMirror) : !facingRight
+        sprite.xScale = (mirrored ? -1 : 1) * abs(sprite.xScale)
     }
 
     /// The body's footprint (not the whole pet cell), used for spacing and clamping.
@@ -403,8 +431,13 @@ final class CrabNode: SKNode {
     }
 
     private func playPet(_ key: String, loop: Bool, completion: (() -> Void)? = nil) {
-        let frames = PetLibrary.frames(key, withoutShadow: shadowCropped)
+        let hover = PetLibrary.hover(key)
+        let frames = PetLibrary.frames(key, withoutShadow: usesPet && (carried || hover.lift > 0))
         guard !frames.isEmpty else { return }
+        petLift = hover.lift
+        petSway = hover.sway
+        applyShadowCrop()
+        applyHover()
         currentPetKey = key
         applyFacing()
         sprite.removeAction(forKey: "gait")
@@ -587,7 +620,7 @@ final class CrabNode: SKNode {
         wanderTarget = nil
         dashTarget = nil
         isMoving = false
-        shadowCropped = false   // a crab can be dropped from the hand straight into leaving
+        carried = false   // a crab can be dropped from the hand straight into leaving
         sprite.speed = 1
         removeAction(forKey: "hop"); removeAction(forKey: "zzz"); removeAction(forKey: "celebrate")
         sprite.zRotation = 0; sprite.yScale = 1; sprite.alpha = 1
@@ -606,12 +639,12 @@ final class CrabNode: SKNode {
         sprite.speed = 1
         removeAction(forKey: "hop"); removeAction(forKey: "zzz"); removeAction(forKey: "celebrate")
         sprite.zRotation = 0; sprite.yScale = 1; sprite.alpha = 1
-        shadowCropped = usesPet
+        carried = true
         if usesPet { playPet("moving", loop: true) } else { march(timePerFrame: 0.05) }
     }
 
     func restoreStatus() {
-        shadowCropped = false
+        carried = false
         applyGait(force: true)
     }
 }

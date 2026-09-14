@@ -6,7 +6,14 @@ import ImageIO
 /// crab state. Frames are sliced from the sheet once and shared by every crab. Each crab's project
 /// colour is applied on the GPU by `hueShader`, so there is one texture per state, not one per colour.
 enum PetLibrary {
-    struct Sheet { let file: String; let frames: Int }
+    struct Sheet {
+        let file: String
+        let frames: Int
+        /// Points this pet hovers above the floor, and how far it drifts to each side.
+        /// Zero for every pet that stands on the ground (see HOVER in tools/render-pets.py).
+        let lift: CGFloat
+        let sway: CGFloat
+    }
 
     static let baseHueDegrees: CGFloat = 14     // the pets' own orange
 
@@ -22,6 +29,13 @@ enum PetLibrary {
     private static let workingPickDefaultsKey = "workingPetBySession"
     private static var workingPicks: [String: String] =
         (UserDefaults.standard.dictionary(forKey: "workingPetBySession") as? [String: String]) ?? [:]
+    /// Animations spoken for by the crabs on screen right now, so a new crab never twins with a
+    /// crab you can actually see while a free animation is left. Rebuilt as crabs claim their
+    /// animation; `releaseWorkingKey` hands one back when a crab leaves.
+    private static var liveWorkingKeys: [String: String] = [:]
+    /// Beyond this many remembered sessions the picks are trimmed back to the live crabs, so an
+    /// old stack of dead sessions can never skew the draw.
+    private static let workingPickMemoryLimit = 200
     private static var frameCache: [String: [SKTexture]] = [:]
     /// One decoded sheet per file, so the plain and shadowless slicings share a single decode.
     private static var sheetTextures: [String: SKTexture] = [:]
@@ -58,29 +72,71 @@ enum PetLibrary {
         fps = (obj["fps"] as? Double) ?? 8
         for (state, info) in states {
             guard let file = info["file"] as? String, let frames = info["frames"] as? Int else { continue }
-            sheets[state] = Sheet(file: file, frames: frames)
+            sheets[state] = Sheet(file: file, frames: frames,
+                                  lift: CGFloat((info["lift"] as? Double) ?? 0),
+                                  sway: CGFloat((info["sway"] as? Double) ?? 0))
         }
     }
 
-    /// The working animation this session keeps for life: drawn at random the first time the
-    /// session is seen, then remembered, so every crab has its own working personality but always
-    /// the same one. The draw favours the animations fewest other sessions already took, so a
-    /// handful of crabs rarely end up as twins.
+    /// The working animation this session keeps: drawn the first time the session is seen, then
+    /// remembered, so every crab has its own working personality and keeps it across restarts.
+    /// The draw skips whatever the crabs already on screen are playing, so no two visible crabs
+    /// are twins while a free animation is left — and a remembered pick that would collide with a
+    /// live crab is re-drawn rather than doubled up.
     static func workingKey(for id: String) -> String {
         load()
         guard !workingKeys.isEmpty else { return "working" }
-        if let picked = workingPicks[id], workingKeys.contains(picked) { return picked }
+        if let claimed = liveWorkingKeys[id] { return claimed }
 
-        var counts: [String: Int] = [:]
-        for key in workingPicks.values { counts[key, default: 0] += 1 }
-        let fewest = workingKeys.map { counts[$0] ?? 0 }.min() ?? 0
-        let candidates = workingKeys.filter { (counts[$0] ?? 0) == fewest }
-        let picked = candidates.randomElement() ?? workingKeys[0]
+        let taken = Set(liveWorkingKeys.filter { $0.key != id }.values)
+        var picked = workingPicks[id]
+        if let p = picked, !workingKeys.contains(p) || taken.contains(p) { picked = nil }
+        let key = picked ?? draw(avoiding: taken)
 
-        workingPicks[id] = picked
+        liveWorkingKeys[id] = key
+        workingPicks[id] = key
+        trimWorkingPicks()
         UserDefaults.standard.set(workingPicks, forKey: workingPickDefaultsKey)
-        if debug { FileHandle.standardError.write(Data("[pets] \(id) -> \(picked)\n".utf8)) }
-        return picked
+        if debug { FileHandle.standardError.write(Data("[pets] \(id) -> \(key)\n".utf8)) }
+        return key
+    }
+
+    /// A crab left the floor: its animation is free again for whoever arrives next. The pick stays
+    /// remembered, so the same session coming back keeps its personality when it can.
+    static func releaseWorkingKey(for id: String) {
+        liveWorkingKeys[id] = nil
+    }
+
+    /// Pick an animation nobody on screen is playing, favouring the one fewest sessions have ever
+    /// taken. With more crabs than animations the free pool runs dry, and the least-doubled-up
+    /// animation wins instead.
+    private static func draw(avoiding taken: Set<String>) -> String {
+        let free = workingKeys.filter { !taken.contains($0) }
+        var counts: [String: Int] = [:]
+        if free.isEmpty {
+            for key in liveWorkingKeys.values { counts[key, default: 0] += 1 }
+        } else {
+            for key in workingPicks.values { counts[key, default: 0] += 1 }
+        }
+        let pool = free.isEmpty ? workingKeys : free
+        let fewest = pool.map { counts[$0] ?? 0 }.min() ?? 0
+        let candidates = pool.filter { (counts[$0] ?? 0) == fewest }
+        return candidates.randomElement() ?? pool[0]
+    }
+
+    /// Sessions are never seen again once they are gone, so the remembered picks would grow for
+    /// ever and, worse, bias the draw toward whatever old sessions happened to miss.
+    private static func trimWorkingPicks() {
+        guard workingPicks.count > workingPickMemoryLimit else { return }
+        workingPicks = workingPicks.filter { liveWorkingKeys[$0.key] != nil }
+    }
+
+    /// How far off the floor a pose plays: the flying pets (astronaut, flying, rocket) hover, and
+    /// two of them also drift side to side. Everything else stands flat on the ground.
+    static func hover(_ state: String) -> (lift: CGFloat, sway: CGFloat) {
+        load()
+        guard let sheet = sheets[state] else { return (0, 0) }
+        return (sheet.lift, sheet.sway)
     }
 
     /// Animation frames for a state key ("working", "moving", …), shared by every crab.

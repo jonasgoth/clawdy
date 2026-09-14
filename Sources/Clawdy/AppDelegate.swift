@@ -4,19 +4,31 @@ import ApplicationServices
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let version = "0.5.0"
 
+    /// The Accessibility ("Window checks") row is finished but hidden: we don't want to ask for
+    /// that permission yet. Nothing else turns Accessibility on, so the feature simply stays off
+    /// until we show the row again. To try it meanwhile:
+    ///     defaults write app.clawdy.Clawdy ShowWindowChecks -bool true
+    static var showsWindowChecks: Bool {
+        UserDefaults.standard.bool(forKey: "ShowWindowChecks")
+    }
+
     private var statusItem: NSStatusItem!
     private var playpen: PlaypenController!
     private var store: SessionStore!
     private let seen = SeenDetector()
 
     private var menu: NSMenu!
-    private let crabCountItem = NSMenuItem(title: "No sessions yet", action: nil, keyEquivalent: "")
+    private let headerItem = NSMenuItem()
+    private let sessionsItem = NSMenuItem()
+    private let sessionsView = MenuListView()
+    private let quitItem = NSMenuItem()
+    private let quitView = MenuListView()
+    private let headerView = MenuHeaderView(version: AppDelegate.version)
     /// Every setting lives in one menu item: a two-column grid of tappable boxes.
     private let gridItem = NSMenuItem()
-    private let gridView = MenuGridView()
+    private let gridView = MenuListView()
 
     /// Rows for busy sessions: their Claude asterisk is redrawn on a timer while the menu is open.
-    private var spinningRows: [NSMenuItem] = []
     private var spinTimer: Timer?
     private var spinFrame = 0
 
@@ -35,16 +47,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu = NSMenu()
         menu.delegate = self
-        let title = NSMenuItem(title: "Clawdy \(Self.version)", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
-        crabCountItem.isEnabled = false
-        menu.addItem(crabCountItem)
+        headerItem.view = headerView
+        menu.addItem(headerItem)
+        sessionsItem.view = sessionsView
+        menu.addItem(sessionsItem)
+        menu.addItem(Self.dividerItem())
         gridItem.view = gridView
         menu.addItem(gridItem)
-        let quit = NSMenuItem(title: "Quit Clawdy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        quit.image = Self.actionIcon("xmark.circle")
-        menu.addItem(quit)
+        menu.addItem(Self.dividerItem())
+        // Quit is drawn as one more settings row so the bottom of the menu matches the rest.
+        quitView.setRows([MenuRow.Model(title: "Quit Clawdy",
+                                        leading: .glyph(IconFont.power),
+                                        control: .action("⌘Q"),
+                                        closesMenu: true,
+                                        action: { NSApp.terminate(nil) })])
+        quitItem.view = quitView
+        quitItem.keyEquivalent = "q"
+        quitItem.action = #selector(NSApplication.terminate(_:))
+        menu.addItem(quitItem)
         statusItem.menu = menu
 
         store.onUpdate = { [weak self] in self?.updateStatusItem() }
@@ -66,6 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.imagePosition = .imageLeading
     }
 
+    /// A slim hairline in place of AppKit's separator, which pads itself generously.
+    private static func dividerItem() -> NSMenuItem {
+        let item = NSMenuItem()
+        item.view = MenuDividerView()
+        item.isEnabled = false
+        return item
+    }
+
     private func toggleSounds() {
         SoundPlayer.enabled.toggle()
         refreshGrid()
@@ -75,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildSessionRows()
         spinFrame = 0
         spinTimer?.invalidate()
-        guard !spinningRows.isEmpty else { return }
+        guard store.rows.contains(where: { $0.status.isBusy }) else { return }
         let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.spinTick() }
         RunLoop.main.add(t, forMode: .common)   // .common covers menu tracking, so it keeps ticking
         spinTimer = t
@@ -84,13 +112,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         spinTimer?.invalidate()
         spinTimer = nil
-        spinningRows = []
     }
 
     private func spinTick() {
         spinFrame = (spinFrame + 1) % ClaudeMark.steps
-        let frame = ClaudeMark.image(step: spinFrame)
-        for item in spinningRows { item.image = frame }
+        sessionsView.setRows(sessionModels())
     }
 
     /// A plain menu-action icon, in the grey AppKit uses for the ones it adds itself.
@@ -120,18 +146,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshGrid()
     }
 
+    /// Kept for the menu row that is hidden for now — see refreshGrid().
     private func resetCrabs() { playpen.scene.resetCrabs() }
 
     /// Session rows are a readout, not a button — but they need an action to avoid being greyed out.
-    @objc private func noop() {}
-
-    /// Jump to the chat: the Desktop app switches to it, or its terminal window comes forward.
-    /// Landing there is proof you have seen it, so the crab drops its badge.
-    @objc private func openSession(_ sender: NSMenuItem) {
-        guard let request = sender.representedObject as? SessionOpener.Request else { return }
-        if SessionOpener.open(request.target) { store.markOpened(request.sessionId) }
-    }
-
     private func toggleHooks() {
         if HookInstaller.isInstalled {
             switch HookInstaller.uninstall() {
@@ -156,8 +174,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Asks macOS for Accessibility permission so Clawdy can read which Claude window is in front
     /// (used to clear Cowork "done" badges precisely). Only ever runs when you click this.
+    /// Not granted yet: macOS shows its own "open System Settings" prompt. Already
+    /// granted: nothing to ask for, so go straight to the pane where it can be taken back.
     private func requestAccessibility() {
-        SeenDetector.requestAccessibility()
+        guard AXIsProcessTrusted() else { return SeenDetector.requestAccessibility() }
+        let pane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        if let url = URL(string: pane) { NSWorkspace.shared.open(url) }
     }
 
     private func notify(_ title: String, _ body: String) {
@@ -170,86 +192,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func rebuildSessionRows() {
-        let rows = store.rows
-        crabCountItem.title = rows.isEmpty
-            ? "No sessions running"
-            : "\(rows.count) session\(rows.count == 1 ? "" : "s") running"
         refreshGrid()
+        sessionsView.setRows(sessionModels())
+    }
 
-        // Drop the old session rows: everything between the count line and the grid.
-        // The index has to be re-read each pass, or the loop walks off the end and eats the
-        // grid plus the actions below it (that is why the menu sometimes came up bare).
-        let firstRow = menu.index(of: crabCountItem) + 1
-        while firstRow < menu.numberOfItems, menu.item(at: firstRow) !== gridItem {
-            menu.removeItem(at: firstRow)
+    /// One row per live session: its status mark, its name, and a click that jumps to the
+    /// chat. Drawn as our own rows so they highlight in the same grey as everything else —
+    /// a stock menu item always highlights in the system accent colour.
+    private func sessionModels() -> [MenuRow.Model] {
+        let rows = store.rows
+        guard !rows.isEmpty else {
+            return [MenuRow.Model(title: "No sessions running", leading: .none, control: .none)]
         }
-        var insertAt = menu.index(of: gridItem)
-        spinningRows = []
-        for row in rows {
-            let item = NSMenuItem(title: row.title, action: nil, keyEquivalent: "")
-            if row.status.isBusy {
-                item.image = ClaudeMark.image(step: spinFrame)
-                spinningRows.append(item)
-            } else {
-                item.image = Self.markImage(row.status)
-            }
-            // Live rows draw full-strength (macOS greys out disabled items, which muted the
-            // asterisk). Desktop chats open on click; a terminal session has nothing to open,
-            // so its row keeps the no-op and stays a plain readout.
-            item.representedObject = row.open.map { SessionOpener.Request(sessionId: row.id, target: $0) }
-            item.action = row.open == nil ? #selector(noop) : #selector(openSession(_:))
-            item.toolTip = row.open == nil ? nil : "Go to this chat"
-            item.target = self
-            menu.insertItem(item, at: insertAt)
-            insertAt += 1
+        return rows.map { row in
+            let mark = row.status.isBusy ? ClaudeMark.image(step: spinFrame) : Self.markImage(row.status)
+            // Desktop chats open on click; a terminal session has nothing to open, so its
+            // row keeps an empty action and stays a plain readout that still looks live.
+            let open = row.open.map { SessionOpener.Request(sessionId: row.id, target: $0) }
+            return MenuRow.Model(title: row.title,
+                                 leading: .image(mark),
+                                 control: .none,
+                                 tooltip: open == nil ? nil : "Go to this chat",
+                                 closesMenu: open != nil,
+                                 action: { [weak self] in
+                                     guard let open else { return }
+                                     if SessionOpener.open(open.target) {
+                                         self?.store.markOpened(open.sessionId)
+                                     }
+                                 })
         }
     }
 
-    /// Rebuilds the settings boxes. Anything still waiting on your permission goes in a
-    /// full-width box on top and disappears once it is granted; the everyday switches sit
-    /// below in two columns, tinted green while they are on.
+    /// Rebuilds the settings list: one row per setting, its switch on the right.
     private func refreshGrid() {
-        let on = NSColor.systemGreen
-        let ask = NSColor.systemBlue
-
-        var wide: [MenuCard.Model] = []
-        if !AXIsProcessTrusted() {
-            wide.append(MenuCard.Model(
-                title: "Window checks",
-                status: "Allow in System Settings",
-                symbol: "macwindow.badge.plus",
-                tint: ask,
-                closesMenu: true,
-                action: { [weak self] in self?.requestAccessibility() }))
-        }
-
+        // macOS decides the window-checks one: the app can read whether permission was
+        // granted, but only System Settings can change it, so the row opens that pane.
         let shown = playpen.isVisible
-        let hooks = HookInstaller.isInstalled
         let sound = SoundPlayer.enabled
-        let grid: [MenuCard.Model] = [
-            MenuCard.Model(title: "Crab visibility",
-                           status: shown ? "Shown" : "Hidden",
-                           symbol: shown ? "eye.fill" : "eye.slash.fill",
-                           tint: shown ? on : nil,
-                           action: { [weak self] in self?.togglePlaypen() }),
-            MenuCard.Model(title: "Sounds",
-                           status: sound ? "On" : "Off",
-                           symbol: sound ? "speaker.wave.2.fill" : "speaker.slash.fill",
-                           tint: sound ? on : nil,
-                           action: { [weak self] in self?.toggleSounds() }),
-            MenuCard.Model(title: "Instant updates",
-                           status: hooks ? "On" : "Off",
-                           symbol: hooks ? "bolt.fill" : "bolt.slash.fill",
-                           tint: hooks ? on : nil,
-                           action: { [weak self] in self?.toggleHooks() }),
-            MenuCard.Model(title: "Crab positions",
-                           status: "Tidy up",
-                           symbol: "sparkles",
-                           tint: ask,
-                           closesMenu: true,
-                           action: { [weak self] in self?.resetCrabs() }),
-        ]
-        gridView.setCards(wide: wide, grid: grid)
+        let hooks = HookInstaller.isInstalled
+        var rows: [MenuRow.Model] = []
+        if Self.showsWindowChecks {
+            rows.append(MenuRow.Model(title: "Window checks",
+                                      leading: .glyph(IconFont.window),
+                                      control: .toggle(AXIsProcessTrusted()),
+                                      closesMenu: true,
+                                      action: { [weak self] in self?.requestAccessibility() }))
+        }
+        rows.append(contentsOf: [
+            MenuRow.Model(title: "Crab visibility",
+                          leading: .glyph(shown ? IconFont.eye : IconFont.eyeOff),
+                          control: .toggle(shown),
+                          action: { [weak self] in self?.togglePlaypen() }),
+            MenuRow.Model(title: "Sounds",
+                          leading: .glyph(sound ? IconFont.volumeHigh : IconFont.volumeOff),
+                          control: .toggle(sound),
+                          action: { [weak self] in self?.toggleSounds() }),
+            MenuRow.Model(title: "Instant updates",
+                          leading: .glyph(hooks ? IconFont.flash : IconFont.flashOff),
+                          control: .toggle(hooks),
+                          action: { [weak self] in self?.toggleHooks() }),
+        ])
+        gridView.setRows(rows)
         gridItem.view = gridView
     }
 }
