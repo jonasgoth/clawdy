@@ -39,9 +39,18 @@ hdiutil create -volname "$VOL" -srcfolder "$STAGE" -fs HFS+ -format UDRW \
 DEV="$(hdiutil attach -readwrite -noverify -noautoopen "$RW" | grep '^/dev/' | head -1 | awk '{print $1}')"
 MOUNT="/Volumes/$VOL"
 
-# Lay the window out. This drives Finder, so the first run asks for permission to
-# control it; say yes, or the DMG still works but opens as a plain file list.
-if ! osascript >/dev/null 2>&1 <<APPLESCRIPT
+# Lay the window out. Finder is what actually arranges a DMG window, and it is not
+# available on a CI runner (no logged-in desktop), so there are two paths:
+#   - a Mac with a desktop: drive Finder, then save the layout it produced back into
+#     Assets/dmg/DS_Store so CI keeps getting the same window;
+#   - CI, or a Mac that refuses to let us control Finder: drop that saved file in.
+# A .DS_Store holds the icon positions, window size and background reference, so the
+# replayed layout is identical to the hand-made one.
+LAYOUT="Assets/dmg/DS_Store"
+use_finder=true
+[[ -n "${CI:-}" || "${CLAWDY_DMG_NO_FINDER:-}" == "1" ]] && use_finder=false
+
+if $use_finder && ! osascript >/dev/null 2>&1 <<APPLESCRIPT
 tell application "Finder"
   tell disk "$VOL"
     open
@@ -64,8 +73,19 @@ tell application "Finder"
 end tell
 APPLESCRIPT
 then
-  echo "Warning: could not drive Finder, so the DMG has no custom layout."
-  echo "         Allow this terminal to control Finder (System Settings > Privacy & Security > Automation) and re-run."
+  use_finder=false
+  echo "Note: could not drive Finder. Falling back to the saved window layout."
+  echo "      To refresh it, allow this terminal to control Finder"
+  echo "      (System Settings > Privacy & Security > Automation) and re-run."
+fi
+
+if $use_finder; then
+  # Keep the committed layout in step with what Finder just made.
+  cp "$MOUNT/.DS_Store" "$LAYOUT" 2>/dev/null || true
+elif [[ -f "$LAYOUT" ]]; then
+  cp "$LAYOUT" "$MOUNT/.DS_Store"
+else
+  echo "Warning: no saved layout at $LAYOUT, so the DMG opens as a plain file list."
 fi
 
 # The mounted disk wears the crab too. This has to happen after Finder is done

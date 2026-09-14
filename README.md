@@ -45,6 +45,10 @@ Grab the latest `Clawdy-<version>.dmg` from [Releases](https://github.com/jonasg
 
 The build is ad-hoc signed, not notarized. The first time, right-click Clawdy in Applications and choose **Open**.
 
+After that Clawdy keeps itself current: it checks GitHub for a new release a few times a
+day, and when there is one the menu grows an **Update to …** row. One click downloads it,
+swaps the app and restarts. Nothing is downloaded until you click.
+
 ### Build from source
 
 You need Xcode or the Command Line Tools.
@@ -61,7 +65,32 @@ This builds `build/Clawdy.app` and launches it. To make your own installer:
 tools/make-dmg.sh
 ```
 
-That writes `build/Clawdy-<version>.dmg` with the drag-to-Applications layout. It asks macOS for permission to control Finder the first time, since Finder is what arranges the window; without it you still get a working DMG, just a plain file list.
+That writes `build/Clawdy-<version>.dmg` with the drag-to-Applications layout. It asks macOS for permission to control Finder the first time, since Finder is what arranges the window. Say no and it falls back to the layout saved in `Assets/dmg/DS_Store`, which is also how the GitHub build gets it: a CI runner has no Finder to drive.
+
+## Releasing
+
+Releases are built by GitHub, not on a laptop. Set the version in `build.sh`, then push a matching tag:
+
+```bash
+git tag v0.6.0
+git push origin v0.6.0
+```
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) builds the app on a macOS
+runner, wraps it in the DMG, and publishes a GitHub Release with the DMG attached and notes
+generated from the commits. The tag sets the version the app reports, so `build.sh`'s
+`VERSION` and the tag should agree.
+
+Everyone already running Clawdy sees the new version in their menu within a few hours. That
+check reads `https://api.github.com/repos/jonasgoth/clawdy/releases/latest` and nothing else.
+
+Two things to know:
+
+- A release is ad-hoc signed, so macOS forgets any Accessibility grant on update, and a fresh
+  download still needs right-click > Open. Fixing both needs a paid Apple Developer account;
+  `release.yml` ends with the steps to add.
+- Updates downloaded by Clawdy itself are not quarantined, because the app fetches them
+  directly rather than through a browser. So an update installs without the right-click dance.
 
 ## Menu
 

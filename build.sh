@@ -5,7 +5,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="0.5.0"
+# Set by CI from the git tag (tools/make-dmg.sh and .github/workflows/release.yml);
+# otherwise this is the version a local build carries.
+VERSION="${CLAWDY_VERSION:-0.6.0}"
 APP="build/Clawdy.app"
 
 echo "Compiling Clawdy…"

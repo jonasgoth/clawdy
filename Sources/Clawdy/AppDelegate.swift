@@ -2,7 +2,9 @@ import AppKit
 import ApplicationServices
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    static let version = "0.5.0"
+    /// Read from the bundle so there is exactly one place the version is set: build.sh,
+    /// which CI fills in from the git tag. A bare binary has no Info.plist, hence "dev".
+    static let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
     /// The Accessibility ("Window checks") row is finished but hidden: we don't want to ask for
     /// that permission yet. Nothing else turns Accessibility on, so the feature simply stays off
@@ -16,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var playpen: PlaypenController!
     private var store: SessionStore!
     private let seen = SeenDetector()
+    private let updater = Updater()
 
     private var menu: NSMenu!
     private let headerItem = NSMenuItem()
@@ -70,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         store.onUpdate = { [weak self] in self?.updateStatusItem() }
         playpen.show()
         store.start()
+        // A new version adds a row to the menu; nothing is downloaded until you click it.
+        updater.onChange = { [weak self] in self?.refreshGrid() }
+        updater.start()
     }
 
     /// Menu bar shows how many crabs are alive; turns red with a "!" when one needs you.
@@ -182,6 +188,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let url = URL(string: pane) { NSWorkspace.shared.open(url) }
     }
 
+    /// Swaps this copy of Clawdy for the new one, then relaunches. Only ever runs when you
+    /// click the update row; a failure leaves the current version exactly as it was.
+    private func installUpdate(_ release: Updater.Release) {
+        let alert = NSAlert()
+        alert.messageText = "Update Clawdy to \(release.version)?"
+        alert.informativeText = "Clawdy will download the new version, replace itself and restart. Your settings and pets come back with it."
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Not now")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        updater.install(release) { [weak self] problem in
+            guard let problem else { return }
+            self?.notify("Could not update Clawdy", problem)
+        }
+    }
+
     private func notify(_ title: String, _ body: String) {
         let alert = NSAlert()
         alert.messageText = title
@@ -231,6 +253,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let sound = SoundPlayer.enabled
         let hooks = HookInstaller.isInstalled
         var rows: [MenuRow.Model] = []
+        if let release = updater.available {
+            let busy = updater.isInstalling
+            rows.append(MenuRow.Model(title: busy ? "Updating…" : "Update to \(release.version)",
+                                      leading: .glyph(IconFont.sparkles),
+                                      control: .action(busy ? "" : "Install"),
+                                      tooltip: busy ? nil : "Download and restart Clawdy",
+                                      closesMenu: true,
+                                      action: busy ? nil : { [weak self] in self?.installUpdate(release) }))
+        }
         if Self.showsWindowChecks {
             rows.append(MenuRow.Model(title: "Window checks",
                                       leading: .glyph(IconFont.window),

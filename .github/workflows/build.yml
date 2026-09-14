@@ -1,0 +1,16 @@
+name: Build
+
+# Every push and pull request builds the app, so a broken commit is caught before
+# anyone tags a release from it. Releases are a separate workflow: release.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Clawdy.app
+        run: ./build.sh

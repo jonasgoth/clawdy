@@ -1,0 +1,77 @@
+name: Release
+
+# Pushing a version tag ships a release: GitHub builds the app, wraps it in the
+# drag-to-Applications DMG and attaches it to a new GitHub Release. Clawdy's own
+# updater (Sources/Clawdy/Updater.swift) reads that release and offers it to people
+# already running the app.
+#
+#   git tag v0.6.0
+#   git push origin v0.6.0
+#
+# "Run workflow" in the Actions tab does the same for a version you type in, which is
+# handy for a re-run after a failed publish.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build and release, e.g. 0.6.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Work out the version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"   # v0.6.0 -> 0.6.0
+          fi
+          echo "CLAWDY_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=v$VERSION" >> "$GITHUB_ENV"
+          echo "Building Clawdy $VERSION"
+
+      - name: Build the DMG
+        # CI has no logged-in Finder to arrange the disk image window, so make-dmg.sh
+        # replays the layout saved in Assets/dmg/DS_Store instead. $CI is already set.
+        run: tools/make-dmg.sh
+
+      - name: Check the app came out with the right version
+        run: |
+          BUILT=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' \
+                  build/Clawdy.app/Contents/Info.plist)
+          test "$BUILT" = "$CLAWDY_VERSION" || {
+            echo "Built $BUILT but expected $CLAWDY_VERSION"; exit 1; }
+          test -f "build/Clawdy-$CLAWDY_VERSION.dmg"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --generate-notes fills the body with the commits since the last release.
+          # If the release already exists (a re-run), just replace its DMG.
+          gh release create "$TAG" "build/Clawdy-$CLAWDY_VERSION.dmg" \
+            --title "Clawdy $CLAWDY_VERSION" \
+            --generate-notes \
+            || gh release upload "$TAG" "build/Clawdy-$CLAWDY_VERSION.dmg" --clobber
+
+# The DMG is ad-hoc signed, so the first launch needs a right-click > Open. To drop that
+# step you need a paid Apple Developer account. Then add repository secrets and, after the
+# build step, import the certificate and notarize:
+#
+#   - run: |
+#       echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+#       security create-keychain -p "" build.keychain
+#       security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+#       codesign --force --options runtime --timestamp --sign "Developer ID Application: …" build/Clawdy.app
+#       xcrun notarytool submit "build/Clawdy-$CLAWDY_VERSION.dmg" --wait …
+#       xcrun stapler staple "build/Clawdy-$CLAWDY_VERSION.dmg"
