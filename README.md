@@ -2,8 +2,6 @@
 
 Little Clawd pets on your Mac desktop, one per Claude session. They show you who is working, who is done, and who needs you.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-![macOS 14+](https://img.shields.io/badge/macOS-14%2B-lightgrey.svg)
 ![Swift 5.9](https://img.shields.io/badge/Swift-5.9-orange.svg)
 ![Unofficial](https://img.shields.io/badge/unofficial-not%20affiliated%20with%20Anthropic-lightgrey.svg)
 
